@@ -14,14 +14,15 @@
 // STEP 1: declare the type of file handler and the read() function
 KSEQ_INIT(gzFile, gzread)
 
-FastxParser::FastxParser( std::vector<std::string>& files, uint32_t numReaders): inputStreams_(files),
+template <typename T>
+FastxParser<T>::FastxParser( std::vector<std::string>& files, uint32_t numReaders): inputStreams_(files),
         parsing_(false), parsingThread_(nullptr)
     {
       blockSize_ = 1000;
       queueCapacity_ = blockSize_ * numReaders;
-        readStructs_ = new ReadSeq[queueCapacity_];
-        readQueue_ = moodycamel::ConcurrentQueue<ReadSeq*>(queueCapacity_, 1 + numReaders, 0);
-        seqContainerQueue_ = moodycamel::ConcurrentQueue<ReadSeq*>(queueCapacity_, 1 + numReaders, 0);
+        readStructs_ = new T[queueCapacity_];
+        readQueue_ = moodycamel::ConcurrentQueue<T*>(queueCapacity_, 1 + numReaders, 0);
+        seqContainerQueue_ = moodycamel::ConcurrentQueue<T*>(queueCapacity_, 1 + numReaders, 0);
 
 	produceContainer_.reset(new moodycamel::ProducerToken(seqContainerQueue_));
 	consumeContainer_.reset(new moodycamel::ConsumerToken(seqContainerQueue_));
@@ -38,14 +39,18 @@ FastxParser::FastxParser( std::vector<std::string>& files, uint32_t numReaders):
 	}
     }
 
-moodycamel::ProducerToken FastxParser::getProducerToken() {
+template <typename T>
+moodycamel::ProducerToken FastxParser<T>::getProducerToken() {
   return moodycamel::ProducerToken(seqContainerQueue_);
 }
-moodycamel::ConsumerToken FastxParser::getConsumerToken() {
+
+template <typename T>
+moodycamel::ConsumerToken FastxParser<T>::getConsumerToken() {
   return moodycamel::ConsumerToken(readQueue_);
 }
 
-FastxParser::~FastxParser() {
+template <typename T>
+FastxParser<T>::~FastxParser() {
         parsingThread_->join();
 	for (size_t i = 0; i < queueCapacity_; ++i) {
 	  if (readStructs_[i].seq != nullptr) { free(readStructs_[i].seq); }
@@ -54,20 +59,21 @@ FastxParser::~FastxParser() {
         delete parsingThread_;
     }
 
-bool FastxParser::start() {
+template <typename T>
+bool FastxParser<T>::start() {
         if (!parsing_) {
             parsing_ = true;
             parsingThread_ = new std::thread([this](){
 		moodycamel::ConsumerToken* cCont = this->consumeContainer_.get();
 		moodycamel::ProducerToken* pRead = this->produceReads_.get();
                 kseq_t* seq;
-                ReadSeq* s;
+                T* s;
 		size_t nr{0};
                 std::cerr << "reading from " << this->inputStreams_.size() << " streams\n";
                 for (auto file : this->inputStreams_) {
 		  std::cerr << "reading from " << file << "\n";
 		  auto blockSize = this->blockSize_;
-		  std::vector<ReadSeq*> local(blockSize_, nullptr);
+		  std::vector<T*> local(blockSize_, nullptr);
 		  size_t numObtained{0};
 		  while (numObtained == 0) {
 		    numObtained = seqContainerQueue_.try_dequeue_bulk(*cCont, local.begin(), blockSize);
@@ -137,7 +143,8 @@ bool FastxParser::start() {
 
     }
 
-bool FastxParser::getReadGroup(moodycamel::ConsumerToken& ct, ReadGroup& seqs) {
+template <typename T>
+bool FastxParser<T>::getReadGroup(moodycamel::ConsumerToken& ct, ReadGroup<T>& seqs) {
   while(parsing_) {
     size_t obtained = readQueue_.try_dequeue_bulk(ct, seqs.begin(), seqs.want());
     if (obtained) {
@@ -150,6 +157,10 @@ bool FastxParser::getReadGroup(moodycamel::ConsumerToken& ct, ReadGroup& seqs) {
   return (obtained > 0);
 }
 
-void FastxParser::finishedWithGroup(moodycamel::ProducerToken& pt, ReadGroup& s) {
+template <typename T>
+void FastxParser<T>::finishedWithGroup(moodycamel::ProducerToken& pt, ReadGroup<T>& s) {
   seqContainerQueue_.enqueue_bulk(pt, s.begin(), s.size());
 }
+
+
+template class FastxParser<ReadSeq>;

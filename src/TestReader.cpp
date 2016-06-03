@@ -11,7 +11,7 @@ int main(int argc, char* argv[]) {
   std::vector<std::string> files;
   files.push_back(argv[1]);
   size_t nt = 8;
-  FastxParser parser(files, nt);
+  FastxParser<ReadSeq> parser(files, nt);
   parser.start();
 
   std::vector<std::thread> readers;
@@ -21,7 +21,7 @@ int main(int argc, char* argv[]) {
     readers.emplace_back([&, i]() {
 	auto pt = parser.getProducerToken();
 	auto ct = parser.getConsumerToken();
-	ReadGroup rg;
+	ReadGroup<ReadSeq> rg;
 	while (true) {
 	  if (parser.getReadGroup(ct, rg)) {
 	    for (auto seq : rg) {
