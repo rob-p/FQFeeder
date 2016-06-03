@@ -24,6 +24,22 @@ struct ReadSeq {
     size_t nlen = 0;
 };
 
+
+class ReadGroup {
+public:
+  ReadGroup(size_t want=1000) : want_(want), have_(0), group_(want, nullptr) {}
+  inline void have(size_t num) { have_ = num; }
+  inline size_t size() { return have_; } 
+  inline size_t want() const { return want_; }
+  ReadSeq* operator[](size_t i) { return group_[i]; }
+  std::vector<ReadSeq*>::iterator begin() { return group_.begin(); }
+  std::vector<ReadSeq*>::iterator end() { return group_.begin() + have_; }
+private:
+  std::vector<ReadSeq*> group_;
+  size_t want_;
+  size_t have_;
+};
+
 class FastxParser {
 public:
   FastxParser( std::vector<std::string>& files, uint32_t numReaders);
@@ -31,20 +47,23 @@ public:
   moodycamel::ProducerToken getProducerToken();
   moodycamel::ConsumerToken getConsumerToken();
     bool start();
-  bool nextRead(moodycamel::ConsumerToken&ct, ReadSeq*& seq);
-  void finishedWithRead(moodycamel::ProducerToken&pt, ReadSeq*& s);
+  bool getReadGroup(moodycamel::ConsumerToken& ct, ReadGroup& seqs);
+    //bool nextRead(moodycamel::ConsumerToken&ct, ReadSeq*& seq);
+  void finishedWithGroup(moodycamel::ProducerToken& pt, ReadGroup& s);
+  //void finishedWithRead(moodycamel::ProducerToken&pt, ReadSeq*& s);
 
 private:
-  int32_t blockSize_;
+  size_t blockSize_;
   std::vector<std::string>& inputStreams_;
     bool parsing_;
     std::thread* parsingThread_;
   moodycamel::ConcurrentQueue<ReadSeq*> readQueue_, seqContainerQueue_;
     ReadSeq* readStructs_;
-  std::unique_ptr<moodycamel::ProducerToken> pt_{nullptr};
-    const size_t queueCapacity_ = 2000000;
+  std::unique_ptr<moodycamel::ProducerToken> produceContainer_{nullptr};
+  std::unique_ptr<moodycamel::ConsumerToken> consumeContainer_{nullptr};
+  std::unique_ptr<moodycamel::ProducerToken> produceReads_{nullptr};
+  std::unique_ptr<moodycamel::ConsumerToken> consumeReads_{nullptr};
+  size_t queueCapacity_;//= 1048576;
 };
-
-//#include "Parser.cpp"
 
 #endif // __STREAMING_READ_PARSER__

@@ -20,7 +20,7 @@ set (CPACK_SOURCE_PACKAGE_FILE_NAME
 set (CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} "${CMAKE_SOURCE_DIR}/cmake/Modules/")
 
 #set the required set the required compile flags
-set (CMAKE_CXX_FLAGS "-fPIC -O3 -DHAVE_ANSI_TERM -DHAVE_SSTREAM -Wall -std=c++11")
+set (CMAKE_CXX_FLAGS "-fPIC -pthread -O3 -DHAVE_ANSI_TERM -DHAVE_SSTREAM -Wall -std=c++11")
 
 ##
 # OSX is strange (some might say, stupid in this regard). Deal with it's quirkines here.

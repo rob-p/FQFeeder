@@ -1,22 +1,68 @@
 #include "FastxParser.hpp"
 #include <iostream>
 #include <vector>
+#include <thread>
+
+struct Bases {
+  uint32_t A, C, G, T;
+};
 
 int main(int argc, char* argv[]) {
   std::vector<std::string> files;
   files.push_back(argv[1]);
-  FastxParser parser(files, 1);
-
-  auto pt = parser.getProducerToken();
-  auto ct = parser.getConsumerToken();
+  size_t nt = 8;
+  FastxParser parser(files, nt);
   parser.start();
-  ReadSeq* seq;
-  size_t rnum{0};
-  while (parser.nextRead(ct, seq)) {
-    ++rnum;
-    std::cerr << "here " << rnum << '\n';
-    parser.finishedWithRead(pt, seq);
+
+  std::vector<std::thread> readers;
+  std::vector<Bases> counters(nt, {0, 0, 0, 0});
+
+  for (size_t i = 0; i < nt; ++i) {
+    readers.emplace_back([&, i]() {
+	auto pt = parser.getProducerToken();
+	auto ct = parser.getConsumerToken();
+	ReadGroup rg;
+	while (true) {
+	  if (parser.getReadGroup(ct, rg)) {
+	    for (auto seq : rg) {
+	      for (size_t j = 0; j < seq->len; ++j){
+		char c = seq->seq[j];
+		switch (c) {
+		case 'A':
+		  counters[i].A++;
+		  break;
+		case 'C':
+		  counters[i].C++;
+		  break;
+		case 'G':
+		  counters[i].G++;
+		  break;
+		case 'T':
+		  counters[i].T++;
+		  break;
+		default:
+		  break;
+		}
+	      }
+	    }
+	    parser.finishedWithGroup(pt, rg);
+	  } else { break; }
+	}
+      });
   }
-  std::cerr << "saw " << rnum << " reads";
+
+
+  for (auto& t : readers) { t.join(); }
+  Bases b = {0, 0, 0, 0};
+  for (size_t i = 0; i < nt; ++i) {
+    b.A += counters[i].A;
+    b.C += counters[i].C;
+    b.G += counters[i].G;
+    b.T += counters[i].T;
+  }
+  std::cerr << "#A = " << b.A << '\n';
+  std::cerr << "#C = " << b.C << '\n';
+  std::cerr << "#G = " << b.G << '\n';
+  std::cerr << "#T = " << b.T << '\n';
   return 0;
 }

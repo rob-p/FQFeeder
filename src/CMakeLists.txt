@@ -19,10 +19,16 @@ link_directories(
 )
 
 add_executable(test_parser ${TEST_SRCS})
+add_executable(test_kseq TestKseq.cpp)
 
 target_link_libraries (
     test_parser
     pthread
     fqfeeder
+    z
+)
+target_link_libraries (
+    test_kseq
+    pthread
     z
 )
