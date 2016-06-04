@@ -26,10 +26,10 @@ FastxParser<T>::FastxParser(std::vector<std::string> files,
     : inputStreams_(files), inputStreams2_(files2), parsing_(false),
       parsingThread_(nullptr),
       blockSize_(chunkSize) {
-  readChunks_.resize(2*numReaders);
-  readQueue_ = moodycamel::ConcurrentQueue<ReadChunk<T>*>(2*numReaders,
+    //readChunks_.resize(2*numReaders);
+    readQueue_ = moodycamel::ConcurrentQueue<std::unique_ptr<ReadChunk<T>>>(2*numReaders,
                                                           1 + numReaders, 0);
-  seqContainerQueue_ = moodycamel::ConcurrentQueue<ReadChunk<T>*>(
+    seqContainerQueue_ = moodycamel::ConcurrentQueue<std::unique_ptr<ReadChunk<T>>>(
                                                           2*numReaders, 1 + numReaders, 0);
 
   produceContainer_.reset(new moodycamel::ProducerToken(seqContainerQueue_));
@@ -38,13 +38,9 @@ FastxParser<T>::FastxParser(std::vector<std::string> files,
   produceReads_.reset(new moodycamel::ProducerToken(readQueue_));
   consumeReads_.reset(new moodycamel::ConsumerToken(readQueue_));
 
-  for (size_t i = 0; i < readChunks_.size(); ++i) {
-    readChunks_[i] = new ReadChunk<T>(blockSize_);
-    while (
-        !seqContainerQueue_.try_enqueue(*produceContainer_, readChunks_[i])) {
-      std::cerr << "Could not enqueue " << i << "!\n";
-      std::cerr << "capacity = " << numReaders << '\n';
-    }
+  for (size_t i = 0; i < 2*numReaders; ++i) {
+      auto chunk = make_unique<ReadChunk<T>>(blockSize_);
+      seqContainerQueue_.enqueue(*produceContainer_, std::move(chunk));
   }
 }
 
@@ -64,10 +60,12 @@ moodycamel::ConsumerToken FastxParser<T>::getConsumerToken_() {
 
 template <typename T> FastxParser<T>::~FastxParser() {
   parsingThread_->join();
+  /*
   for (auto& c : readChunks_) {
       delete c;
   }
   readChunks_.clear();
+  */
   delete parsingThread_;
 }
 /*
@@ -107,12 +105,12 @@ template <typename T>
 void parseReads(std::vector<std::string>& inputStreams, bool& parsing,
                 moodycamel::ConsumerToken* cCont,
                 moodycamel::ProducerToken* pRead,
-                moodycamel::ConcurrentQueue<ReadChunk<T>*>& seqContainerQueue_,
-                moodycamel::ConcurrentQueue<ReadChunk<T>*>& readQueue_) {
+                moodycamel::ConcurrentQueue<std::unique_ptr<ReadChunk<T>>>& seqContainerQueue_,
+                moodycamel::ConcurrentQueue<std::unique_ptr<ReadChunk<T>>>& readQueue_) {
   kseq_t* seq;
   T* s;
   for (auto file : inputStreams) {
-    ReadChunk<T>* local;
+      std::unique_ptr<ReadChunk<T>> local;
     while (!seqContainerQueue_.try_dequeue(*cCont, local)) {
       std::cerr << "couldn't dequeue read chunk\n";
     }
@@ -133,7 +131,7 @@ void parseReads(std::vector<std::string>& inputStreams, bool& parsing,
 
       // If we've filled the local vector, then dump to the concurrent queue
       if (numWaiting == numObtained) {
-        readQueue_.enqueue(local);
+          while (!readQueue_.try_enqueue(std::move(local))) {}
         numWaiting = 0;
         numObtained = 0;
         // And get more empty reads
@@ -148,7 +146,7 @@ void parseReads(std::vector<std::string>& inputStreams, bool& parsing,
     // then dump them here.
     if (numWaiting > 0) {
       local->have(numWaiting);
-      readQueue_.try_enqueue(*pRead, local);
+      while (!readQueue_.try_enqueue(*pRead, std::move(local))) {}
       numWaiting = 0;
     }
     // destroy the parser and close the file
@@ -166,8 +164,9 @@ void parseReadPair(
     std::vector<std::string>& inputStreams,
     std::vector<std::string>& inputStreams2, bool& parsing,
     moodycamel::ConsumerToken* cCont, moodycamel::ProducerToken* pRead,
-    moodycamel::ConcurrentQueue<ReadChunk<T>*>& seqContainerQueue_,
-    moodycamel::ConcurrentQueue<ReadChunk<T>*>& readQueue_) {
+    moodycamel::ConcurrentQueue<std::unique_ptr<ReadChunk<T>>>& seqContainerQueue_,
+    moodycamel::ConcurrentQueue<std::unique_ptr<ReadChunk<T>>>& readQueue_) {
+
   kseq_t* seq;
   kseq_t* seq2;
   T* s;
@@ -176,7 +175,7 @@ void parseReadPair(
     auto& file = inputStreams[fn];
     auto& file2 = inputStreams2[fn];
     
-    ReadChunk<T>* local;
+    std::unique_ptr<ReadChunk<T>> local;
     while (!seqContainerQueue_.try_dequeue(*cCont, local)) {
       std::cerr << "couldn't dequeue read chunk\n";
     }
@@ -201,7 +200,7 @@ void parseReadPair(
 
       // If we've filled the local vector, then dump to the concurrent queue
       if (numWaiting == numObtained) {
-        readQueue_.enqueue(local);
+          while (!readQueue_.try_enqueue(std::move(local))) {}
         numWaiting = 0;
         numObtained = 0;
         // And get more empty reads
@@ -217,7 +216,7 @@ void parseReadPair(
     // then dump them here.
     if (numWaiting > 0) {
       local->have(numWaiting);
-      readQueue_.try_enqueue(*pRead, local);
+      while (!readQueue_.try_enqueue(*pRead, std::move(local))) {}
       numWaiting = 0;
     }
     // destroy the parser and close the file
@@ -272,22 +271,19 @@ template <> bool FastxParser<ReadPair>::start() {
 }
 
 template <typename T> bool FastxParser<T>::refill(ReadGroup<T>& seqs) {
-    // If the current chunk has anything, then give it back first
-    if (!seqs.empty()) {
-        seqContainerQueue_.enqueue(seqs.producerToken(), seqs.chunkPtr());
-        seqs.setChunkEmpty();
+    finishedWithGroup(seqs);
+    while (parsing_) {
+        if (readQueue_.try_dequeue(seqs.consumerToken(), seqs.chunkPtr())) {
+            return true;
+        }
     }
-  while (parsing_) {
-    if (readQueue_.try_dequeue(seqs.consumerToken(), seqs.chunkPtr())) {
-      return true;
-    }
-  }
-  return readQueue_.try_dequeue(seqs.consumerToken(), seqs.chunkPtr());
+    return readQueue_.try_dequeue(seqs.consumerToken(), seqs.chunkPtr());
 }
 
 template <typename T> void FastxParser<T>::finishedWithGroup(ReadGroup<T>& s) {
+    // If this read group is holding a valid chunk, then give it back 
     if (!s.empty()) {
-        seqContainerQueue_.enqueue(s.producerToken(), s.chunkPtr());
+        seqContainerQueue_.enqueue(s.producerToken(), std::move(s.takeChunkPtr()));
         s.setChunkEmpty();
     }
 }

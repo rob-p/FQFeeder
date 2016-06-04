@@ -100,7 +100,8 @@ public:
       : pt_(std::move(pt)), ct_(std::move(ct)) {}
   moodycamel::ConsumerToken& consumerToken() { return ct_; }
   moodycamel::ProducerToken& producerToken() { return pt_; }
-  ReadChunk<T>*& chunkPtr() { return chunk_; }
+    std::unique_ptr<ReadChunk<T>>& chunkPtr() { return chunk_; }
+    std::unique_ptr<ReadChunk<T>>&& takeChunkPtr() { return std::move(chunk_); }
   inline void have(size_t num) { chunk_->have(num); }
   inline size_t size() { return chunk_->size(); }
   inline size_t want() const { return chunk_->want(); }
@@ -109,10 +110,10 @@ public:
   typename std::vector<T>::iterator end() {
     return chunk_->begin() + chunk_->size();
   }
-  void setChunkEmpty() { chunk_ = nullptr; }
-  bool empty() const { return chunk_ == nullptr; }
+  void setChunkEmpty() { chunk_.release(); }
+  bool empty() const { return chunk_.get() == nullptr; }
 private:
-  ReadChunk<T>* chunk_{nullptr};
+    std::unique_ptr<ReadChunk<T>> chunk_{nullptr};
   moodycamel::ProducerToken pt_;
   moodycamel::ConsumerToken ct_;
 };
@@ -137,8 +138,8 @@ private:
   bool parsing_;
   std::thread* parsingThread_;
   size_t blockSize_;
-  moodycamel::ConcurrentQueue<ReadChunk<T> *> readQueue_, seqContainerQueue_;
-  std::vector<ReadChunk<T>*> readChunks_;
+    moodycamel::ConcurrentQueue<std::unique_ptr<ReadChunk<T>>> readQueue_, seqContainerQueue_;
+    //std::vector<std::unique_ptr<ReadChunk<T>>> readChunks_;
   std::unique_ptr<moodycamel::ProducerToken> produceContainer_{nullptr};
   std::unique_ptr<moodycamel::ConsumerToken> consumeContainer_{nullptr};
   std::unique_ptr<moodycamel::ProducerToken> produceReads_{nullptr};
