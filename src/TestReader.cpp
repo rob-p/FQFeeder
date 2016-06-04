@@ -13,7 +13,7 @@ int main(int argc, char* argv[]) {
   std::vector<std::string> files2;
   files2.push_back(argv[2]);
 
-  size_t nt = 8;
+  size_t nt = 3;
   FastxParser<ReadPair> parser(files, files2, nt);
   parser.start();
 
@@ -67,7 +67,7 @@ int main(int argc, char* argv[]) {
               }
             }
           }
-          parser.finishedWithGroup(rg);
+          //parser.finishedWithGroup(rg);
         } else {
           break;
         }

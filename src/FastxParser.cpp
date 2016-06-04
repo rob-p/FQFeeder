@@ -26,11 +26,11 @@ FastxParser<T>::FastxParser(std::vector<std::string> files,
     : inputStreams_(files), inputStreams2_(files2), parsing_(false),
       parsingThread_(nullptr),
       blockSize_(chunkSize) {
-  readChunks_.resize(numReaders);
-  readQueue_ = moodycamel::ConcurrentQueue<ReadChunk<T>*>(numReaders,
+  readChunks_.resize(2*numReaders);
+  readQueue_ = moodycamel::ConcurrentQueue<ReadChunk<T>*>(2*numReaders,
                                                           1 + numReaders, 0);
   seqContainerQueue_ = moodycamel::ConcurrentQueue<ReadChunk<T>*>(
-                                                          numReaders, 1 + numReaders, 0);
+                                                          2*numReaders, 1 + numReaders, 0);
 
   produceContainer_.reset(new moodycamel::ProducerToken(seqContainerQueue_));
   consumeContainer_.reset(new moodycamel::ConsumerToken(seqContainerQueue_));
@@ -38,7 +38,7 @@ FastxParser<T>::FastxParser(std::vector<std::string> files,
   produceReads_.reset(new moodycamel::ProducerToken(readQueue_));
   consumeReads_.reset(new moodycamel::ConsumerToken(readQueue_));
 
-  for (size_t i = 0; i < numReaders; ++i) {
+  for (size_t i = 0; i < readChunks_.size(); ++i) {
     readChunks_[i] = new ReadChunk<T>(blockSize_);
     while (
         !seqContainerQueue_.try_enqueue(*produceContainer_, readChunks_[i])) {
@@ -62,17 +62,15 @@ moodycamel::ConsumerToken FastxParser<T>::getConsumerToken_() {
   return moodycamel::ConsumerToken(readQueue_);
 }
 
-template <> FastxParser<ReadSeq>::~FastxParser() {
+template <typename T> FastxParser<T>::~FastxParser() {
   parsingThread_->join();
   for (auto& c : readChunks_) {
-      for (auto& r : *c) {
-          if (r.seq != nullptr) { free(r.seq); }
-          if (r.name != nullptr) { free(r.name); }
-      }
       delete c;
   }
+  readChunks_.clear();
   delete parsingThread_;
 }
+/*
 template <> FastxParser<ReadPair>::~FastxParser() {
     parsingThread_->join();
     for (auto& c : readChunks_) {
@@ -86,7 +84,7 @@ template <> FastxParser<ReadPair>::~FastxParser() {
     }
   delete parsingThread_;
 }
-
+*/
 inline void copyRecord(kseq_t* seq, ReadSeq* s) {
     // Possibly allocate more space for the sequence
     if (seq->seq.l > s->len) {
@@ -274,6 +272,11 @@ template <> bool FastxParser<ReadPair>::start() {
 }
 
 template <typename T> bool FastxParser<T>::refill(ReadGroup<T>& seqs) {
+    // If the current chunk has anything, then give it back first
+    if (!seqs.empty()) {
+        seqContainerQueue_.enqueue(seqs.producerToken(), seqs.chunkPtr());
+        seqs.setChunkEmpty();
+    }
   while (parsing_) {
     if (readQueue_.try_dequeue(seqs.consumerToken(), seqs.chunkPtr())) {
       return true;
@@ -283,8 +286,12 @@ template <typename T> bool FastxParser<T>::refill(ReadGroup<T>& seqs) {
 }
 
 template <typename T> void FastxParser<T>::finishedWithGroup(ReadGroup<T>& s) {
-  seqContainerQueue_.enqueue(s.producerToken(), s.chunkPtr());
+    if (!s.empty()) {
+        seqContainerQueue_.enqueue(s.producerToken(), s.chunkPtr());
+        s.setChunkEmpty();
+    }
 }
+
 
 template class FastxParser<ReadSeq>;
 template class FastxParser<ReadPair>;
