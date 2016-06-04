@@ -50,6 +50,9 @@ That's it! You can do this from as many threads as you want (assuming you specif
 in the `FastxParser` constructor). The `refill()` function will return false when there are 
 no more reads to be parsed.  Using the single-end parser is almost identical, except that you get back
 a `ReadSeq` rather than a `ReadPair`, so there are no `.first` and `.second` members, just the `seq`,
-`name`, `len`, and `nlen` fields.  So, that's all!  If you find this module useful, please let me know.
-If you have bug reports, or feature requests, please submit them via this repository.  I'm also happy
-to accept pull-requests!  Happy multi-threaded read processing!
+`name`, `len`, and `nlen` fields.  *Note*: When `parser` goes out of scope, it will reclaim all memory 
+pertaining to read data. This means that if you have a `ReadGroup` outside of the lifetime of the
+parser, you should not access it.  This shouldn't be an issue, however, as the `parser` should outlive
+worker threads in most idioms I can imagine.
+
+So, that's all!  If you find this module useful, please let me know. If you have bug reports, or feature requests, please submit them via this repository.  I'm also happy to accept pull-requests!  Happy multi-threaded read processing!
