@@ -50,8 +50,8 @@ while (parser.refill(rg)) {
 }
 ```
 
-That's it! You can do this from as many threads as you want (assuming you specified the correct number)
-in the `FastxParser` constructor.  The only tricky part is to remember to call `parser.finishedWithGroup(rg)` 
+That's it! You can do this from as many threads as you want (assuming you specified the correct number
+in the `FastxParser` constructor).  The only tricky part is to remember to call `parser.finishedWithGroup(rg)` 
 when you're done processing a group of reads.  The `refill()` function will return false when there are 
 no more reads to be parsed.  Using the single-end parser is almost identical, except that you get back
 a `ReadSeq` rather than a `ReadPair`, so there are no `.first` and `.second` members, just the `seq`,
