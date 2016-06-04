@@ -30,7 +30,7 @@ struct ReadPair {
 
 template <typename T> class ReadChunk {
 public:
-  ReadChunk(size_t want = 1000) : group_(want), want_(want), have_(want) {}
+  ReadChunk(size_t want) : group_(want), want_(want), have_(want) {}
   inline void have(size_t num) { have_ = num; }
   inline size_t size() { return have_; }
   inline size_t want() const { return want_; }
@@ -68,9 +68,9 @@ private:
 
 template <typename T> class FastxParser {
 public:
-  FastxParser(std::vector<std::string> files, uint32_t numReaders);
+    FastxParser(std::vector<std::string> files, uint32_t numReaders, uint32_t chunkSize = 1000);
   FastxParser(std::vector<std::string> files, std::vector<std::string> files2,
-              uint32_t numReaders);
+              uint32_t numReaders, uint32_t chunkSize = 1000);
   ~FastxParser();
   bool start();
   ReadGroup<T> getReadGroup();
@@ -81,11 +81,11 @@ private:
   moodycamel::ProducerToken getProducerToken_();
   moodycamel::ConsumerToken getConsumerToken_();
 
-  size_t blockSize_;
   std::vector<std::string> inputStreams_;
   std::vector<std::string> inputStreams2_;
   bool parsing_;
   std::thread* parsingThread_;
+  size_t blockSize_;
   moodycamel::ConcurrentQueue<ReadChunk<T> *> readQueue_, seqContainerQueue_;
   std::vector<ReadChunk<T>*> readChunks_;
   std::unique_ptr<moodycamel::ProducerToken> produceContainer_{nullptr};

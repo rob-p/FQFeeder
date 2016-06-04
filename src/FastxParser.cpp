@@ -15,16 +15,17 @@
 KSEQ_INIT(gzFile, gzread)
 
 template <typename T>
-FastxParser<T>::FastxParser(std::vector<std::string> files, uint32_t numReaders)
-    : FastxParser(files, {}, numReaders) {}
+FastxParser<T>::FastxParser(std::vector<std::string> files, uint32_t numReaders, uint32_t chunkSize)
+: FastxParser(files, {}, numReaders, chunkSize) {}
 
 template <typename T>
 FastxParser<T>::FastxParser(std::vector<std::string> files,
                             std::vector<std::string> files2,
-                            uint32_t numReaders)
+                            uint32_t numReaders,
+                            uint32_t chunkSize)
     : inputStreams_(files), inputStreams2_(files2), parsing_(false),
-      parsingThread_(nullptr) {
-  blockSize_ = 1000;
+      parsingThread_(nullptr),
+      blockSize_(chunkSize) {
   readChunks_.resize(numReaders);
   readQueue_ = moodycamel::ConcurrentQueue<ReadChunk<T>*>(numReaders,
                                                           1 + numReaders, 0);
