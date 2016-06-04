@@ -15,22 +15,21 @@
 KSEQ_INIT(gzFile, gzread)
 
 template <typename T>
-FastxParser<T>::FastxParser(std::vector<std::string> files, uint32_t numReaders, uint32_t chunkSize)
-: FastxParser(files, {}, numReaders, chunkSize) {}
+FastxParser<T>::FastxParser(std::vector<std::string> files, uint32_t numReaders,
+                            uint32_t chunkSize)
+    : FastxParser(files, {}, numReaders, chunkSize) {}
 
 template <typename T>
 FastxParser<T>::FastxParser(std::vector<std::string> files,
                             std::vector<std::string> files2,
-                            uint32_t numReaders,
-                            uint32_t chunkSize)
+                            uint32_t numReaders, uint32_t chunkSize)
     : inputStreams_(files), inputStreams2_(files2), parsing_(false),
-      parsingThread_(nullptr),
-      blockSize_(chunkSize) {
-    //readChunks_.resize(2*numReaders);
-    readQueue_ = moodycamel::ConcurrentQueue<std::unique_ptr<ReadChunk<T>>>(2*numReaders,
-                                                          1 + numReaders, 0);
-    seqContainerQueue_ = moodycamel::ConcurrentQueue<std::unique_ptr<ReadChunk<T>>>(
-                                                          2*numReaders, 1 + numReaders, 0);
+      parsingThread_(nullptr), blockSize_(chunkSize) {
+  readQueue_ = moodycamel::ConcurrentQueue<std::unique_ptr<ReadChunk<T>>>(
+      2 * numReaders, 1 + numReaders, 0);
+  seqContainerQueue_ =
+      moodycamel::ConcurrentQueue<std::unique_ptr<ReadChunk<T>>>(
+          2 * numReaders, 1 + numReaders, 0);
 
   produceContainer_.reset(new moodycamel::ProducerToken(seqContainerQueue_));
   consumeContainer_.reset(new moodycamel::ConsumerToken(seqContainerQueue_));
@@ -38,9 +37,9 @@ FastxParser<T>::FastxParser(std::vector<std::string> files,
   produceReads_.reset(new moodycamel::ProducerToken(readQueue_));
   consumeReads_.reset(new moodycamel::ConsumerToken(readQueue_));
 
-  for (size_t i = 0; i < 2*numReaders; ++i) {
-      auto chunk = make_unique<ReadChunk<T>>(blockSize_);
-      seqContainerQueue_.enqueue(*produceContainer_, std::move(chunk));
+  for (size_t i = 0; i < 2 * numReaders; ++i) {
+    auto chunk = make_unique<ReadChunk<T>>(blockSize_);
+    seqContainerQueue_.enqueue(*produceContainer_, std::move(chunk));
   }
 }
 
@@ -84,33 +83,34 @@ template <> FastxParser<ReadPair>::~FastxParser() {
 }
 */
 inline void copyRecord(kseq_t* seq, ReadSeq* s) {
-    // Possibly allocate more space for the sequence
-    if (seq->seq.l > s->len) {
-        s->seq = static_cast<char*>(realloc(s->seq, seq->seq.l));
-    }
-    // Copy the sequence length and sequence over to the ReadSeq struct
-    s->len = seq->seq.l;
-    memcpy(s->seq, seq->seq.s, s->len);
+  // Possibly allocate more space for the sequence
+  if (seq->seq.l > s->len) {
+    s->seq = static_cast<char*>(realloc(s->seq, seq->seq.l));
+  }
+  // Copy the sequence length and sequence over to the ReadSeq struct
+  s->len = seq->seq.l;
+  memcpy(s->seq, seq->seq.s, s->len);
 
-    // Possibly allocate more space for the name
-    if (seq->name.l > s->nlen) {
-        s->name = static_cast<char*>(realloc(s->name, seq->name.l));
-    }
-    // Copy the name length and name over to the ReadSeq struct
-    s->nlen = seq->name.l;
-    memcpy(s->name, seq->name.s, s->nlen);
+  // Possibly allocate more space for the name
+  if (seq->name.l > s->nlen) {
+    s->name = static_cast<char*>(realloc(s->name, seq->name.l));
+  }
+  // Copy the name length and name over to the ReadSeq struct
+  s->nlen = seq->name.l;
+  memcpy(s->name, seq->name.s, s->nlen);
 }
 
 template <typename T>
-void parseReads(std::vector<std::string>& inputStreams, bool& parsing,
-                moodycamel::ConsumerToken* cCont,
-                moodycamel::ProducerToken* pRead,
-                moodycamel::ConcurrentQueue<std::unique_ptr<ReadChunk<T>>>& seqContainerQueue_,
-                moodycamel::ConcurrentQueue<std::unique_ptr<ReadChunk<T>>>& readQueue_) {
+void parseReads(
+    std::vector<std::string>& inputStreams, bool& parsing,
+    moodycamel::ConsumerToken* cCont, moodycamel::ProducerToken* pRead,
+    moodycamel::ConcurrentQueue<std::unique_ptr<ReadChunk<T>>>&
+        seqContainerQueue_,
+    moodycamel::ConcurrentQueue<std::unique_ptr<ReadChunk<T>>>& readQueue_) {
   kseq_t* seq;
   T* s;
   for (auto file : inputStreams) {
-      std::unique_ptr<ReadChunk<T>> local;
+    std::unique_ptr<ReadChunk<T>> local;
     while (!seqContainerQueue_.try_dequeue(*cCont, local)) {
       std::cerr << "couldn't dequeue read chunk\n";
     }
@@ -131,7 +131,8 @@ void parseReads(std::vector<std::string>& inputStreams, bool& parsing,
 
       // If we've filled the local vector, then dump to the concurrent queue
       if (numWaiting == numObtained) {
-          while (!readQueue_.try_enqueue(std::move(local))) {}
+        while (!readQueue_.try_enqueue(std::move(local))) {
+        }
         numWaiting = 0;
         numObtained = 0;
         // And get more empty reads
@@ -146,7 +147,8 @@ void parseReads(std::vector<std::string>& inputStreams, bool& parsing,
     // then dump them here.
     if (numWaiting > 0) {
       local->have(numWaiting);
-      while (!readQueue_.try_enqueue(*pRead, std::move(local))) {}
+      while (!readQueue_.try_enqueue(*pRead, std::move(local))) {
+      }
       numWaiting = 0;
     }
     // destroy the parser and close the file
@@ -157,14 +159,13 @@ void parseReads(std::vector<std::string>& inputStreams, bool& parsing,
   parsing = false;
 }
 
-
-
 template <typename T>
 void parseReadPair(
     std::vector<std::string>& inputStreams,
     std::vector<std::string>& inputStreams2, bool& parsing,
     moodycamel::ConsumerToken* cCont, moodycamel::ProducerToken* pRead,
-    moodycamel::ConcurrentQueue<std::unique_ptr<ReadChunk<T>>>& seqContainerQueue_,
+    moodycamel::ConcurrentQueue<std::unique_ptr<ReadChunk<T>>>&
+        seqContainerQueue_,
     moodycamel::ConcurrentQueue<std::unique_ptr<ReadChunk<T>>>& readQueue_) {
 
   kseq_t* seq;
@@ -174,7 +175,7 @@ void parseReadPair(
   for (size_t fn = 0; fn < inputStreams.size(); ++fn) {
     auto& file = inputStreams[fn];
     auto& file2 = inputStreams2[fn];
-    
+
     std::unique_ptr<ReadChunk<T>> local;
     while (!seqContainerQueue_.try_dequeue(*cCont, local)) {
       std::cerr << "couldn't dequeue read chunk\n";
@@ -200,7 +201,8 @@ void parseReadPair(
 
       // If we've filled the local vector, then dump to the concurrent queue
       if (numWaiting == numObtained) {
-          while (!readQueue_.try_enqueue(std::move(local))) {}
+        while (!readQueue_.try_enqueue(std::move(local))) {
+        }
         numWaiting = 0;
         numObtained = 0;
         // And get more empty reads
@@ -216,7 +218,8 @@ void parseReadPair(
     // then dump them here.
     if (numWaiting > 0) {
       local->have(numWaiting);
-      while (!readQueue_.try_enqueue(*pRead, std::move(local))) {}
+      while (!readQueue_.try_enqueue(*pRead, std::move(local))) {
+      }
       numWaiting = 0;
     }
     // destroy the parser and close the file
@@ -245,19 +248,19 @@ template <> bool FastxParser<ReadSeq>::start() {
 
 template <> bool FastxParser<ReadPair>::start() {
   if (!parsing_) {
-      // Some basic checking to ensure the read files look "sane".
-      if (inputStreams_.size() != inputStreams2_.size()) {
-          throw std::invalid_argument("There should be the same number "
-                                      "of files for the left and right reads");
+    // Some basic checking to ensure the read files look "sane".
+    if (inputStreams_.size() != inputStreams2_.size()) {
+      throw std::invalid_argument("There should be the same number "
+                                  "of files for the left and right reads");
+    }
+    for (size_t i = 0; i < inputStreams_.size(); ++i) {
+      auto& s1 = inputStreams_[i];
+      auto& s2 = inputStreams2_[i];
+      if (s1 == s2) {
+        throw std::invalid_argument("You provided the same file " + s1 +
+                                    " as both a left and right file");
       }
-      for (size_t i = 0; i < inputStreams_.size(); ++i) {
-          auto& s1 = inputStreams_[i];
-          auto& s2 = inputStreams2_[i];
-          if (s1 == s2) {
-              throw std::invalid_argument("You provided the same file " +
-                                          s1 + " as both a left and right file");
-          }
-      }
+    }
     parsing_ = true;
     parsingThread_ = new std::thread([this]() {
       parseReadPair(this->inputStreams_, this->inputStreams2_, this->parsing_,
@@ -271,23 +274,22 @@ template <> bool FastxParser<ReadPair>::start() {
 }
 
 template <typename T> bool FastxParser<T>::refill(ReadGroup<T>& seqs) {
-    finishedWithGroup(seqs);
-    while (parsing_) {
-        if (readQueue_.try_dequeue(seqs.consumerToken(), seqs.chunkPtr())) {
-            return true;
-        }
+  finishedWithGroup(seqs);
+  while (parsing_) {
+    if (readQueue_.try_dequeue(seqs.consumerToken(), seqs.chunkPtr())) {
+      return true;
     }
-    return readQueue_.try_dequeue(seqs.consumerToken(), seqs.chunkPtr());
+  }
+  return readQueue_.try_dequeue(seqs.consumerToken(), seqs.chunkPtr());
 }
 
 template <typename T> void FastxParser<T>::finishedWithGroup(ReadGroup<T>& s) {
-    // If this read group is holding a valid chunk, then give it back 
-    if (!s.empty()) {
-        seqContainerQueue_.enqueue(s.producerToken(), std::move(s.takeChunkPtr()));
-        s.setChunkEmpty();
-    }
+  // If this read group is holding a valid chunk, then give it back
+  if (!s.empty()) {
+    seqContainerQueue_.enqueue(s.producerToken(), std::move(s.takeChunkPtr()));
+    s.setChunkEmpty();
+  }
 }
-
 
 template class FastxParser<ReadSeq>;
 template class FastxParser<ReadPair>;

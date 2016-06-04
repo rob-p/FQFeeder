@@ -20,8 +20,8 @@ extern "C" {
 #define __FASTX_PARSER_PRECXX14_MAKE_UNIQUE__
 
 #if __cplusplus >= 201402L
-    #include <memory>
-    using std::make_unique
+#include <memory>
+using std::make_unique
 #else
 
 #include <cstddef>
@@ -29,47 +29,47 @@ extern "C" {
 #include <type_traits>
 #include <utility>
 
-    template<class T> struct _Unique_if {
-        using _Single_object = std::unique_ptr<T>;
-    };
+template <class T> struct _Unique_if {
+  using _Single_object = std::unique_ptr<T>;
+};
 
-    template<class T> struct _Unique_if<T[]> {
-        using _Unknown_bound = std::unique_ptr<T[]>;
-    };
+template <class T> struct _Unique_if<T[]> {
+  using _Unknown_bound = std::unique_ptr<T[]>;
+};
 
-    template<class T, size_t N> struct _Unique_if<T[N]> {
-        using _Known_bound = void;
-    };
+template <class T, size_t N> struct _Unique_if<T[N]> {
+  using _Known_bound = void;
+};
 
-    template<class T, class... Args>
-        typename _Unique_if<T>::_Single_object
-        make_unique(Args&&... args) {
-        return std::unique_ptr<T>(new T(std::forward<Args>(args)...));
-        }
+template <class T, class... Args>
+typename _Unique_if<T>::_Single_object make_unique(Args&&... args) {
+  return std::unique_ptr<T>(new T(std::forward<Args>(args)...));
+}
 
-    template<class T>
-        typename _Unique_if<T>::_Unknown_bound
-        make_unique(size_t n) {
-        using U = typename std::remove_extent<T>::type;
-            return std::unique_ptr<T>(new U[n]());
-        }
+template <class T>
+typename _Unique_if<T>::_Unknown_bound make_unique(size_t n) {
+  using U = typename std::remove_extent<T>::type;
+  return std::unique_ptr<T>(new U[n]());
+}
 
-    template<class T, class... Args>
-        typename _Unique_if<T>::_Known_bound
-    make_unique(Args&&...) = delete;
+template <class T, class... Args>
+typename _Unique_if<T>::_Known_bound make_unique(Args&&...) = delete;
 
 #endif // C++11
 #endif //__FASTX_PARSER_PRECXX14_MAKE_UNIQUE__
 
-
-struct ReadSeq {
+    struct ReadSeq {
   char* seq = nullptr;
   size_t len = 0;
   char* name = nullptr;
   size_t nlen = 0;
   ~ReadSeq() {
-      if (seq != nullptr) { free(seq); }
-      if (name != nullptr) { free(name); }
+    if (seq != nullptr) {
+      free(seq);
+    }
+    if (name != nullptr) {
+      free(name);
+    }
   }
 };
 
@@ -100,8 +100,10 @@ public:
       : pt_(std::move(pt)), ct_(std::move(ct)) {}
   moodycamel::ConsumerToken& consumerToken() { return ct_; }
   moodycamel::ProducerToken& producerToken() { return pt_; }
-    std::unique_ptr<ReadChunk<T>>& chunkPtr() { return chunk_; }
-    std::unique_ptr<ReadChunk<T>>&& takeChunkPtr() { return std::move(chunk_); }
+  // get a reference to the chunk this ReadGroup owns
+  std::unique_ptr<ReadChunk<T>>& chunkPtr() { return chunk_; }
+  // get a *moveable* reference to the chunk this ReadGroup owns
+  std::unique_ptr<ReadChunk<T>>&& takeChunkPtr() { return std::move(chunk_); }
   inline void have(size_t num) { chunk_->have(num); }
   inline size_t size() { return chunk_->size(); }
   inline size_t want() const { return chunk_->want(); }
@@ -112,15 +114,17 @@ public:
   }
   void setChunkEmpty() { chunk_.release(); }
   bool empty() const { return chunk_.get() == nullptr; }
+
 private:
-    std::unique_ptr<ReadChunk<T>> chunk_{nullptr};
+  std::unique_ptr<ReadChunk<T>> chunk_{nullptr};
   moodycamel::ProducerToken pt_;
   moodycamel::ConsumerToken ct_;
 };
 
 template <typename T> class FastxParser {
 public:
-    FastxParser(std::vector<std::string> files, uint32_t numReaders, uint32_t chunkSize = 1000);
+  FastxParser(std::vector<std::string> files, uint32_t numReaders,
+              uint32_t chunkSize = 1000);
   FastxParser(std::vector<std::string> files, std::vector<std::string> files2,
               uint32_t numReaders, uint32_t chunkSize = 1000);
   ~FastxParser();
@@ -138,8 +142,9 @@ private:
   bool parsing_;
   std::thread* parsingThread_;
   size_t blockSize_;
-    moodycamel::ConcurrentQueue<std::unique_ptr<ReadChunk<T>>> readQueue_, seqContainerQueue_;
-    //std::vector<std::unique_ptr<ReadChunk<T>>> readChunks_;
+  moodycamel::ConcurrentQueue<std::unique_ptr<ReadChunk<T>>> readQueue_,
+      seqContainerQueue_;
+  // std::vector<std::unique_ptr<ReadChunk<T>>> readChunks_;
   std::unique_ptr<moodycamel::ProducerToken> produceContainer_{nullptr};
   std::unique_ptr<moodycamel::ConsumerToken> consumeContainer_{nullptr};
   std::unique_ptr<moodycamel::ProducerToken> produceReads_{nullptr};
