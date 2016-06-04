@@ -86,6 +86,24 @@ template <> FastxParser<ReadPair>::~FastxParser() {
   delete parsingThread_;
 }
 
+inline void copyRecord(kseq_t* seq, ReadSeq* s) {
+    // Possibly allocate more space for the sequence
+    if (seq->seq.l > s->len) {
+        s->seq = static_cast<char*>(realloc(s->seq, seq->seq.l));
+    }
+    // Copy the sequence length and sequence over to the ReadSeq struct
+    s->len = seq->seq.l;
+    memcpy(s->seq, seq->seq.s, s->len);
+
+    // Possibly allocate more space for the name
+    if (seq->name.l > s->nlen) {
+        s->name = static_cast<char*>(realloc(s->name, seq->name.l));
+    }
+    // Copy the name length and name over to the ReadSeq struct
+    s->nlen = seq->name.l;
+    memcpy(s->name, seq->name.s, s->nlen);
+}
+
 template <typename T>
 void parseReads(std::vector<std::string>& inputStreams, bool& parsing,
                 moodycamel::ConsumerToken* cCont,
@@ -118,21 +136,8 @@ void parseReads(std::vector<std::string>& inputStreams, bool& parsing,
       }
       ++nr;
       s = &((*local)[numWaiting++]);
-      // Possibly allocate more space for the sequence
-      if (seq->seq.l > s->len) {
-        s->seq = static_cast<char*>(realloc(s->seq, seq->seq.l));
-      }
-      // Copy the sequence length and sequence over to the ReadSeq struct
-      s->len = seq->seq.l;
-      memcpy(s->seq, seq->seq.s, s->len);
 
-      // Possibly allocate more space for the name
-      if (seq->name.l > s->nlen) {
-        s->name = static_cast<char*>(realloc(s->name, seq->name.l));
-      }
-      // Copy the name length and name over to the ReadSeq struct
-      s->nlen = seq->name.l;
-      memcpy(s->name, seq->name.s, s->nlen);
+      copyRecord(seq, s);
 
       // If we've filled the local vector, then dump to the concurrent queue
       if (numWaiting == numObtained) {
@@ -162,23 +167,7 @@ void parseReads(std::vector<std::string>& inputStreams, bool& parsing,
   parsing = false;
 }
 
-inline void copyRecord(kseq_t* seq, ReadSeq* s) {
-  // Possibly allocate more space for the sequence
-  if (seq->seq.l > s->len) {
-    s->seq = static_cast<char*>(realloc(s->seq, seq->seq.l));
-  }
-  // Copy the sequence length and sequence over to the ReadSeq struct
-  s->len = seq->seq.l;
-  memcpy(s->seq, seq->seq.s, s->len);
 
-  // Possibly allocate more space for the name
-  if (seq->name.l > s->nlen) {
-    s->name = static_cast<char*>(realloc(s->name, seq->name.l));
-  }
-  // Copy the name length and name over to the ReadSeq struct
-  s->nlen = seq->name.l;
-  memcpy(s->name, seq->name.s, s->nlen);
-}
 
 template <typename T>
 void parseReadPair(
