@@ -16,7 +16,7 @@ extern "C" {
 
 #include "concurrentqueue.h"
 
-ifndef __FASTX_PARSER_PRECXX14_MAKE_UNIQUE__
+#ifndef __FASTX_PARSER_PRECXX14_MAKE_UNIQUE__
 #define __FASTX_PARSER_PRECXX14_MAKE_UNIQUE__
 
 #if __cplusplus >= 201402L
@@ -145,4 +145,4 @@ private:
   std::unique_ptr<moodycamel::ConsumerToken> consumeReads_{nullptr};
 };
 
-#endif // __STREAMING_READ_PARSER__
+#endif // __FASTX_PARSER__
