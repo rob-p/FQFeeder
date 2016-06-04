@@ -112,10 +112,7 @@ void parseReads(std::vector<std::string>& inputStreams, bool& parsing,
                 moodycamel::ConcurrentQueue<ReadChunk<T>*>& readQueue_) {
   kseq_t* seq;
   T* s;
-  size_t nr{0};
-  std::cerr << "reading from " << inputStreams.size() << " streams\n";
   for (auto file : inputStreams) {
-    std::cerr << "reading from " << file << "\n";
     ReadChunk<T>* local;
     while (!seqContainerQueue_.try_dequeue(*cCont, local)) {
       std::cerr << "couldn't dequeue read chunk\n";
@@ -131,10 +128,6 @@ void parseReads(std::vector<std::string>& inputStreams, bool& parsing,
     int ksv = kseq_read(seq);
 
     while (ksv >= 0) {
-      if (nr % 1000000 == 0) {
-        std::cerr << "saw " << nr << " reads\n";
-      }
-      ++nr;
       s = &((*local)[numWaiting++]);
 
       copyRecord(seq, s);
@@ -179,12 +172,11 @@ void parseReadPair(
   kseq_t* seq;
   kseq_t* seq2;
   T* s;
-  size_t nr{0};
-  std::cerr << "reading from " << inputStreams.size() << " streams\n";
+
   for (size_t fn = 0; fn < inputStreams.size(); ++fn) {
     auto& file = inputStreams[fn];
     auto& file2 = inputStreams2[fn];
-    std::cerr << "reading from (" << file << ", " << file2 << ")\n";
+    
     ReadChunk<T>* local;
     while (!seqContainerQueue_.try_dequeue(*cCont, local)) {
       std::cerr << "couldn't dequeue read chunk\n";
@@ -203,10 +195,7 @@ void parseReadPair(
     int ksv = kseq_read(seq);
     int ksv2 = kseq_read(seq2);
     while (ksv >= 0 and ksv2 >= 0) {
-      if (nr % 1000000 == 0) {
-        std::cerr << "saw " << nr << " reads\n";
-      }
-      ++nr;
+
       s = &((*local)[numWaiting++]);
       copyRecord(seq, &s->first);
       copyRecord(seq2, &s->second);
@@ -258,6 +247,19 @@ template <> bool FastxParser<ReadSeq>::start() {
 
 template <> bool FastxParser<ReadPair>::start() {
   if (!parsing_) {
+      // Some basic checking to ensure the read files look "sane".
+      if (inputStreams_.size() != inputStreams2_.size()) {
+          throw std::invalid_argument("There should be the same number "
+                                      "of files for the left and right reads");
+      }
+      for (size_t i = 0; i < inputStreams_.size(); ++i) {
+          auto& s1 = inputStreams_[i];
+          auto& s2 = inputStreams2_[i];
+          if (s1 == s2) {
+              throw std::invalid_argument("You provided the same file " +
+                                          s1 + " as both a left and right file");
+          }
+      }
     parsing_ = true;
     parsingThread_ = new std::thread([this]() {
       parseReadPair(this->inputStreams_, this->inputStreams2_, this->parsing_,

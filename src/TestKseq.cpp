@@ -25,7 +25,6 @@ int main(int argc, char* argv[]) {
   seq = kseq_init(fp);        // STEP 3: initialize seq
   seq2 = kseq_init(fp2);      // STEP 3: initialize seq
   Bases counter = {0, 0, 0, 0};
-  size_t nr{0};
   size_t rnum{0};
   while ((l = kseq_read(seq)) >= 0 and
          (l2 = kseq_read(seq2)) >= 0) { // STEP 4: read sequence
