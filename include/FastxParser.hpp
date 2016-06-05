@@ -58,7 +58,7 @@ typename _Unique_if<T>::_Known_bound make_unique(Args&&...) = delete;
 #endif // C++11
 #endif //__FASTX_PARSER_PRECXX14_MAKE_UNIQUE__
 
-    struct ReadSeq {
+struct ReadSeq {
   char* seq = nullptr;
   size_t len = 0;
   char* name = nullptr;

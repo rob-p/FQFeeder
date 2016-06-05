@@ -40,11 +40,11 @@ FastxParser<T>::FastxParser(std::vector<std::string> files,
   numParsing_ = 0;
 
   readQueue_ = moodycamel::ConcurrentQueue<std::unique_ptr<ReadChunk<T>>>(
-      2 * numConsumers, numParsers, 0);
+      4 * numConsumers, numParsers, 0);
 
   seqContainerQueue_ =
       moodycamel::ConcurrentQueue<std::unique_ptr<ReadChunk<T>>>(
-          2 * numConsumers, 1 + numConsumers, 0);
+          4 * numConsumers, 1 + numConsumers, 0);
 
   workQueue_ = moodycamel::ConcurrentQueue<uint32_t>(numParsers_);
 
@@ -64,7 +64,7 @@ FastxParser<T>::FastxParser(std::vector<std::string> files,
   // enqueue the appropriate number of read chunks so that we can start
   // filling them once the parser has been started.
   moodycamel::ProducerToken produceContainer(seqContainerQueue_);
-  for (size_t i = 0; i < 2 * numConsumers; ++i) {
+  for (size_t i = 0; i < 4 * numConsumers; ++i) {
     auto chunk = make_unique<ReadChunk<T>>(blockSize_);
     seqContainerQueue_.enqueue(produceContainer, std::move(chunk));
   }
