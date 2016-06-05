@@ -26,7 +26,7 @@ FastxParser<ReadPair> parser(files, files2, nt, np);
 
 This constructor looks the same, except you use `ReadPair` as the template parameter and pass in 
 two vectors of strings, the first is for the "left" (`_1`) reads and the second is for the "right" (`_2`) reads.
-**You need not explicitly provide an explicit value for np; if you don't, it will default to 1**.  It only 
+**You need not explicitly provide a value for np; if you don't, it will default to 1**.  It only 
 makes sense to spawn multiple producer / parser threads if you're reading from more than one file (or more than one file pair, in paired-end mode), and it doesn't make sense to have more producers than files (file pairs).  In fact, if you request more producers than filenames given in the `files` vector, then a message will be emitted and the number of producers will be set to the number of files.  Using multiple producer threads makes the most sense if the input files are compressed, or located on separate physical disks.
 
 With the `parser` created as above, up to `nt` different threads can pull reads from this parser.  For a given thread, the idiom to obtain a group of reads is as follows (using the paired-end parser as an example):
