@@ -15,31 +15,58 @@
 KSEQ_INIT(gzFile, gzread)
 
 template <typename T>
-FastxParser<T>::FastxParser(std::vector<std::string> files, uint32_t numReaders,
+FastxParser<T>::FastxParser(std::vector<std::string> files,
+                            uint32_t numConsumers, uint32_t numParsers,
                             uint32_t chunkSize)
-    : FastxParser(files, {}, numReaders, chunkSize) {}
+    : FastxParser(files, {}, numConsumers, numParsers, chunkSize) {}
 
 template <typename T>
 FastxParser<T>::FastxParser(std::vector<std::string> files,
                             std::vector<std::string> files2,
-                            uint32_t numReaders, uint32_t chunkSize)
-    : inputStreams_(files), inputStreams2_(files2), parsing_(false),
-      parsingThread_(nullptr), blockSize_(chunkSize) {
+                            uint32_t numConsumers, uint32_t numParsers,
+                            uint32_t chunkSize)
+    : inputStreams_(files), inputStreams2_(files2), numParsing_(0),
+      blockSize_(chunkSize) {
+
+  if (numParsers > files.size()) {
+    std::cerr << "Can't make user of more parsing threads than file (pairs); "
+                 "setting # of parsing threads to "
+              << files.size();
+    numParsers = files.size();
+  }
+  numParsers_ = numParsers;
+
+  // nobody is parsing yet
+  numParsing_ = 0;
+
   readQueue_ = moodycamel::ConcurrentQueue<std::unique_ptr<ReadChunk<T>>>(
-      2 * numReaders, 1 + numReaders, 0);
+      2 * numConsumers, numParsers, 0);
+
   seqContainerQueue_ =
       moodycamel::ConcurrentQueue<std::unique_ptr<ReadChunk<T>>>(
-          2 * numReaders, 1 + numReaders, 0);
+          2 * numConsumers, 1 + numConsumers, 0);
 
-  produceContainer_.reset(new moodycamel::ProducerToken(seqContainerQueue_));
-  consumeContainer_.reset(new moodycamel::ConsumerToken(seqContainerQueue_));
+  workQueue_ = moodycamel::ConcurrentQueue<uint32_t>(numParsers_);
 
-  produceReads_.reset(new moodycamel::ProducerToken(readQueue_));
-  consumeReads_.reset(new moodycamel::ConsumerToken(readQueue_));
+  // push all file ids on the queue
+  for (size_t i = 0; i < files.size(); ++i) {
+    workQueue_.enqueue(i);
+  }
 
-  for (size_t i = 0; i < 2 * numReaders; ++i) {
+  // every parsing thread gets a consumer token for the seqContainerQueue
+  // and a producer token for the readQueue.
+  for (size_t i = 0; i < numParsers_; ++i) {
+    consumeContainers_.emplace_back(
+        new moodycamel::ConsumerToken(seqContainerQueue_));
+    produceReads_.emplace_back(new moodycamel::ProducerToken(readQueue_));
+  }
+
+  // enqueue the appropriate number of read chunks so that we can start
+  // filling them once the parser has been started.
+  moodycamel::ProducerToken produceContainer(seqContainerQueue_);
+  for (size_t i = 0; i < 2 * numConsumers; ++i) {
     auto chunk = make_unique<ReadChunk<T>>(blockSize_);
-    seqContainerQueue_.enqueue(*produceContainer_, std::move(chunk));
+    seqContainerQueue_.enqueue(produceContainer, std::move(chunk));
   }
 }
 
@@ -58,30 +85,11 @@ moodycamel::ConsumerToken FastxParser<T>::getConsumerToken_() {
 }
 
 template <typename T> FastxParser<T>::~FastxParser() {
-  parsingThread_->join();
-  /*
-  for (auto& c : readChunks_) {
-      delete c;
+  for (auto& t : parsingThreads_) {
+    t->join();
   }
-  readChunks_.clear();
-  */
-  delete parsingThread_;
 }
-/*
-template <> FastxParser<ReadPair>::~FastxParser() {
-    parsingThread_->join();
-    for (auto& c : readChunks_) {
-        for (auto& r : *c) {
-            if (r.first.seq != nullptr) { free(r.first.seq); }
-            if (r.second.seq != nullptr) { free(r.second.seq); }
-            if (r.first.name != nullptr) { free(r.first.name); }
-            if (r.second.name != nullptr) { free(r.second.name); }
-        }
-      delete c;
-    }
-  delete parsingThread_;
-}
-*/
+
 inline void copyRecord(kseq_t* seq, ReadSeq* s) {
   // Possibly allocate more space for the sequence
   if (seq->seq.l > s->len) {
@@ -102,14 +110,17 @@ inline void copyRecord(kseq_t* seq, ReadSeq* s) {
 
 template <typename T>
 void parseReads(
-    std::vector<std::string>& inputStreams, bool& parsing,
+    std::vector<std::string>& inputStreams, std::atomic<uint32_t>& numParsing,
     moodycamel::ConsumerToken* cCont, moodycamel::ProducerToken* pRead,
+    moodycamel::ConcurrentQueue<uint32_t>& workQueue,
     moodycamel::ConcurrentQueue<std::unique_ptr<ReadChunk<T>>>&
         seqContainerQueue_,
     moodycamel::ConcurrentQueue<std::unique_ptr<ReadChunk<T>>>& readQueue_) {
   kseq_t* seq;
   T* s;
-  for (auto file : inputStreams) {
+  uint32_t fn{0};
+  while (workQueue.try_dequeue(fn)) {
+    auto file = inputStreams[fn];
     std::unique_ptr<ReadChunk<T>> local;
     while (!seqContainerQueue_.try_dequeue(*cCont, local)) {
       std::cerr << "couldn't dequeue read chunk\n";
@@ -156,14 +167,15 @@ void parseReads(
     gzclose(fp);
   }
 
-  parsing = false;
+  --numParsing;
 }
 
 template <typename T>
 void parseReadPair(
     std::vector<std::string>& inputStreams,
-    std::vector<std::string>& inputStreams2, bool& parsing,
+    std::vector<std::string>& inputStreams2, std::atomic<uint32_t>& numParsing,
     moodycamel::ConsumerToken* cCont, moodycamel::ProducerToken* pRead,
+    moodycamel::ConcurrentQueue<uint32_t>& workQueue,
     moodycamel::ConcurrentQueue<std::unique_ptr<ReadChunk<T>>>&
         seqContainerQueue_,
     moodycamel::ConcurrentQueue<std::unique_ptr<ReadChunk<T>>>& readQueue_) {
@@ -172,7 +184,9 @@ void parseReadPair(
   kseq_t* seq2;
   T* s;
 
-  for (size_t fn = 0; fn < inputStreams.size(); ++fn) {
+  uint32_t fn{0};
+  while (workQueue.try_dequeue(fn)) {
+    // for (size_t fn = 0; fn < inputStreams.size(); ++fn) {
     auto& file = inputStreams[fn];
     auto& file2 = inputStreams2[fn];
 
@@ -229,17 +243,20 @@ void parseReadPair(
     gzclose(fp2);
   }
 
-  parsing = false;
+  --numParsing;
 }
 
 template <> bool FastxParser<ReadSeq>::start() {
-  if (!parsing_) {
-    parsing_ = true;
-    parsingThread_ = new std::thread([this]() {
-      parseReads(this->inputStreams_, this->parsing_,
-                 this->consumeContainer_.get(), this->produceReads_.get(),
-                 this->seqContainerQueue_, this->readQueue_);
-    });
+  if (numParsing_ == 0) {
+    for (size_t i = 0; i < numParsers_; ++i) {
+      ++numParsing_;
+      parsingThreads_.emplace_back(new std::thread([this, i]() {
+        parseReads(this->inputStreams_, this->numParsing_,
+                   this->consumeContainers_[i].get(),
+                   this->produceReads_[i].get(), this->workQueue_,
+                   this->seqContainerQueue_, this->readQueue_);
+      }));
+    }
     return true;
   } else {
     return false;
@@ -247,7 +264,8 @@ template <> bool FastxParser<ReadSeq>::start() {
 }
 
 template <> bool FastxParser<ReadPair>::start() {
-  if (!parsing_) {
+  if (numParsing_ == 0) {
+
     // Some basic checking to ensure the read files look "sane".
     if (inputStreams_.size() != inputStreams2_.size()) {
       throw std::invalid_argument("There should be the same number "
@@ -261,12 +279,15 @@ template <> bool FastxParser<ReadPair>::start() {
                                     " as both a left and right file");
       }
     }
-    parsing_ = true;
-    parsingThread_ = new std::thread([this]() {
-      parseReadPair(this->inputStreams_, this->inputStreams2_, this->parsing_,
-                    this->consumeContainer_.get(), this->produceReads_.get(),
-                    this->seqContainerQueue_, this->readQueue_);
-    });
+    for (size_t i = 0; i < numParsers_; ++i) {
+      ++numParsing_;
+      parsingThreads_.emplace_back(new std::thread([this, i]() {
+        parseReadPair(this->inputStreams_, this->inputStreams2_,
+                      this->numParsing_, this->consumeContainers_[i].get(),
+                      this->produceReads_[i].get(), this->workQueue_,
+                      this->seqContainerQueue_, this->readQueue_);
+      }));
+    }
     return true;
   } else {
     return false;
@@ -275,7 +296,7 @@ template <> bool FastxParser<ReadPair>::start() {
 
 template <typename T> bool FastxParser<T>::refill(ReadGroup<T>& seqs) {
   finishedWithGroup(seqs);
-  while (parsing_) {
+  while (numParsing_ > 0) {
     if (readQueue_.try_dequeue(seqs.consumerToken(), seqs.chunkPtr())) {
       return true;
     }

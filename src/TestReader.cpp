@@ -8,13 +8,27 @@ struct Bases {
 };
 
 int main(int argc, char* argv[]) {
-  std::vector<std::string> files;
-  files.push_back(argv[1]);
-  std::vector<std::string> files2;
-  files2.push_back(argv[2]);
+   if (argc == 1) {
+       std::cerr << "usage: test_parser fa1 fb1 ... fa2 fb2 ...";
+       return 1;
+   } 
+   int numFiles = argc - 1;
+   if (numFiles % 2 != 0) {
+       std::cerr << "you must provide an even number of files!\n";
+       return 1;
+   }
+   
+   size_t numPairs = numFiles / 2;
+   std::vector<std::string> files;
+   std::vector<std::string> files2;
+   for (size_t i = 1; i <= numPairs; ++i) {
+       files.push_back(argv[i]);
+       files2.push_back(argv[i + numPairs]);
+   }
 
-  size_t nt = 3;
-  FastxParser<ReadPair> parser(files, files2, nt);
+  size_t nt = 4;
+  size_t np = 2;
+  FastxParser<ReadPair> parser(files, files2, nt, np);
   parser.start();
 
   std::vector<std::thread> readers;

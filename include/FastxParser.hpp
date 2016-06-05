@@ -123,10 +123,12 @@ private:
 
 template <typename T> class FastxParser {
 public:
-  FastxParser(std::vector<std::string> files, uint32_t numReaders,
-              uint32_t chunkSize = 1000);
+  FastxParser(std::vector<std::string> files, uint32_t numConsumers,
+              uint32_t numParsers = 1, uint32_t chunkSize = 1000);
+
   FastxParser(std::vector<std::string> files, std::vector<std::string> files2,
-              uint32_t numReaders, uint32_t chunkSize = 1000);
+              uint32_t numConsumers, uint32_t numParsers = 1,
+              uint32_t chunkSize = 1000);
   ~FastxParser();
   bool start();
   ReadGroup<T> getReadGroup();
@@ -139,16 +141,18 @@ private:
 
   std::vector<std::string> inputStreams_;
   std::vector<std::string> inputStreams2_;
-  bool parsing_;
-  std::thread* parsingThread_;
+  uint32_t numParsers_;
+  std::atomic<uint32_t> numParsing_;
+  std::vector<std::unique_ptr<std::thread>> parsingThreads_;
   size_t blockSize_;
   moodycamel::ConcurrentQueue<std::unique_ptr<ReadChunk<T>>> readQueue_,
       seqContainerQueue_;
-  // std::vector<std::unique_ptr<ReadChunk<T>>> readChunks_;
-  std::unique_ptr<moodycamel::ProducerToken> produceContainer_{nullptr};
-  std::unique_ptr<moodycamel::ConsumerToken> consumeContainer_{nullptr};
-  std::unique_ptr<moodycamel::ProducerToken> produceReads_{nullptr};
-  std::unique_ptr<moodycamel::ConsumerToken> consumeReads_{nullptr};
+
+  // holds the indices of files (file-pairs) to be processed
+  moodycamel::ConcurrentQueue<uint32_t> workQueue_;
+
+  std::vector<std::unique_ptr<moodycamel::ProducerToken>> produceReads_;
+  std::vector<std::unique_ptr<moodycamel::ConsumerToken>> consumeContainers_;
 };
 
 #endif // __FASTX_PARSER__
