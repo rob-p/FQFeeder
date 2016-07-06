@@ -14,6 +14,7 @@
 // STEP 1: declare the type of file handler and the read() function
 KSEQ_INIT(gzFile, gzread)
 
+namespace fastx_parser {
 template <typename T>
 FastxParser<T>::FastxParser(std::vector<std::string> files,
                             uint32_t numConsumers, uint32_t numParsers,
@@ -91,21 +92,9 @@ template <typename T> FastxParser<T>::~FastxParser() {
 }
 
 inline void copyRecord(kseq_t* seq, ReadSeq* s) {
-  // Possibly allocate more space for the sequence
-  if (seq->seq.l > s->len) {
-    s->seq = static_cast<char*>(realloc(s->seq, seq->seq.l));
-  }
-  // Copy the sequence length and sequence over to the ReadSeq struct
-  s->len = seq->seq.l;
-  memcpy(s->seq, seq->seq.s, s->len);
-
-  // Possibly allocate more space for the name
-  if (seq->name.l > s->nlen) {
-    s->name = static_cast<char*>(realloc(s->name, seq->name.l));
-  }
-  // Copy the name length and name over to the ReadSeq struct
-  s->nlen = seq->name.l;
-  memcpy(s->name, seq->name.s, s->nlen);
+  // Copy over the sequence and read name
+  s->seq.assign(seq->seq.s, seq->seq.l);
+  s->name.assign(seq->name.s, seq->name.l);
 }
 
 template <typename T>
@@ -314,3 +303,4 @@ template <typename T> void FastxParser<T>::finishedWithGroup(ReadGroup<T>& s) {
 
 template class FastxParser<ReadSeq>;
 template class FastxParser<ReadPair>;
+}

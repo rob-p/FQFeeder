@@ -28,7 +28,7 @@ int main(int argc, char* argv[]) {
 
   size_t nt = 4;
   size_t np = 2;
-  FastxParser<ReadPair> parser(files, files2, nt, np);
+  fastx_parser::FastxParser<fastx_parser::ReadPair> parser(files, files2, nt, np);
   parser.start();
 
   std::vector<std::thread> readers;
@@ -42,7 +42,7 @@ int main(int argc, char* argv[]) {
           for (auto& seqPair : rg) {
             auto& seq = seqPair.first;
             auto& seq2 = seqPair.second;
-            for (size_t j = 0; j < seq.len; ++j) {
+            for (size_t j = 0; j < seq.seq.length(); ++j) {
               char c = seq.seq[j];
               switch (c) {
               case 'A':
@@ -61,7 +61,7 @@ int main(int argc, char* argv[]) {
                 break;
               }
             }
-            for (size_t j = 0; j < seq2.len; ++j) {
+            for (size_t j = 0; j < seq2.seq.length(); ++j) {
               char c = seq2.seq[j];
               switch (c) {
               case 'A':

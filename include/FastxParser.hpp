@@ -58,19 +58,11 @@ typename _Unique_if<T>::_Known_bound make_unique(Args&&...) = delete;
 #endif // C++11
 #endif //__FASTX_PARSER_PRECXX14_MAKE_UNIQUE__
 
+namespace fastx_parser {
 struct ReadSeq {
-  char* seq = nullptr;
-  size_t len = 0;
-  char* name = nullptr;
-  size_t nlen = 0;
-  ~ReadSeq() {
-    if (seq != nullptr) {
-      free(seq);
-    }
-    if (name != nullptr) {
-      free(name);
-    }
-  }
+    std::string seq;
+    std::string name;
+    ~ReadSeq() {}
 };
 
 struct ReadPair {
@@ -154,5 +146,5 @@ private:
   std::vector<std::unique_ptr<moodycamel::ProducerToken>> produceReads_;
   std::vector<std::unique_ptr<moodycamel::ConsumerToken>> consumeContainers_;
 };
-
+}
 #endif // __FASTX_PARSER__
