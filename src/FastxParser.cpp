@@ -97,6 +97,14 @@ inline void copyRecord(kseq_t* seq, ReadSeq* s) {
   s->name.assign(seq->name.s, seq->name.l);
 }
 
+inline void copyRecord(kseq_t* seq, ReadQual* s) {
+    // Copy over the sequence and read name 
+    // and quality
+    s->seq.assign(seq->seq.s, seq->seq.l);
+    s->name.assign(seq->name.s, seq->name.l);
+    s->qual.assign(seq->qual.s, seq->qual.l);
+}
+  
 template <typename T>
 void parseReads(
     std::vector<std::string>& inputStreams, std::atomic<uint32_t>& numParsing,
@@ -159,6 +167,23 @@ void parseReads(
   --numParsing;
 }
 
+template <> bool FastxParser<ReadQual>::start() {
+   if (numParsing_ == 0) {
+     for (size_t i = 0; i < numParsers_; ++i) {
+       ++numParsing_;
+       parsingThreads_.emplace_back(new std::thread([this, i]() {
+             parseReads(this->inputStreams_, this->numParsing_,
+                        this->consumeContainers_[i].get(),
+                        this->produceReads_[i].get(), this->workQueue_,
+                        this->seqContainerQueue_, this->readQueue_);
+           }));
+     }
+     return true;
+   } else {
+     return false;
+   }
+ }
+  
 template <typename T>
 void parseReadPair(
     std::vector<std::string>& inputStreams,
@@ -302,5 +327,6 @@ template <typename T> void FastxParser<T>::finishedWithGroup(ReadGroup<T>& s) {
 }
 
 template class FastxParser<ReadSeq>;
+template class FastxParser<ReadQual>;
 template class FastxParser<ReadPair>;
 }
