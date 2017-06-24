@@ -65,6 +65,13 @@ struct ReadSeq {
     ~ReadSeq() {}
 };
 
+struct ReadQual {
+     std::string seq;
+     std::string name;
+     std::string qual;
+     ~ReadQual() {}
+ };
+  
 struct ReadPair {
   ReadSeq first;
   ReadSeq second;
