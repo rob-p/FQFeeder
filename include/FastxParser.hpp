@@ -76,6 +76,11 @@ struct ReadPair {
   ReadSeq first;
   ReadSeq second;
 };
+  
+struct ReadQualPair {
+  ReadQual first;
+  ReadQual second;
+};
 
 template <typename T> class ReadChunk {
 public:
