@@ -166,23 +166,6 @@ void parseReads(
 
   --numParsing;
 }
-
-template <> bool FastxParser<ReadQual>::start() {
-   if (numParsing_ == 0) {
-     for (size_t i = 0; i < numParsers_; ++i) {
-       ++numParsing_;
-       parsingThreads_.emplace_back(new std::thread([this, i]() {
-             parseReads(this->inputStreams_, this->numParsing_,
-                        this->consumeContainers_[i].get(),
-                        this->produceReads_[i].get(), this->workQueue_,
-                        this->seqContainerQueue_, this->readQueue_);
-           }));
-     }
-     return true;
-   } else {
-     return false;
-   }
- }
   
 template <typename T>
 void parseReadPair(
@@ -276,6 +259,23 @@ template <> bool FastxParser<ReadSeq>::start() {
     return false;
   }
 }
+  
+template <> bool FastxParser<ReadQual>::start() {
+   if (numParsing_ == 0) {
+     for (size_t i = 0; i < numParsers_; ++i) {
+       ++numParsing_;
+       parsingThreads_.emplace_back(new std::thread([this, i]() {
+             parseReads(this->inputStreams_, this->numParsing_,
+                        this->consumeContainers_[i].get(),
+                        this->produceReads_[i].get(), this->workQueue_,
+                        this->seqContainerQueue_, this->readQueue_);
+           }));
+     }
+     return true;
+   } else {
+     return false;
+   }
+ }
 
 template <> bool FastxParser<ReadPair>::start() {
   if (numParsing_ == 0) {
@@ -308,6 +308,37 @@ template <> bool FastxParser<ReadPair>::start() {
   }
 }
 
+template <> bool FastxParser<ReadQualPair>::start() {
+  if (numParsing_ == 0) {
+
+    // Some basic checking to ensure the read files look "sane".
+    if (inputStreams_.size() != inputStreams2_.size()) {
+      throw std::invalid_argument("There should be the same number "
+                                  "of files for the left and right reads");
+    }
+    for (size_t i = 0; i < inputStreams_.size(); ++i) {
+      auto& s1 = inputStreams_[i];
+      auto& s2 = inputStreams2_[i];
+      if (s1 == s2) {
+        throw std::invalid_argument("You provided the same file " + s1 +
+                                    " as both a left and right file");
+      }
+    }
+    for (size_t i = 0; i < numParsers_; ++i) {
+      ++numParsing_;
+      parsingThreads_.emplace_back(new std::thread([this, i]() {
+        parseReadPair(this->inputStreams_, this->inputStreams2_,
+                      this->numParsing_, this->consumeContainers_[i].get(),
+                      this->produceReads_[i].get(), this->workQueue_,
+                      this->seqContainerQueue_, this->readQueue_);
+      }));
+    }
+    return true;
+  } else {
+    return false;
+  }
+}
+  
 template <typename T> bool FastxParser<T>::refill(ReadGroup<T>& seqs) {
   finishedWithGroup(seqs);
   while (numParsing_ > 0) {
@@ -329,4 +360,5 @@ template <typename T> void FastxParser<T>::finishedWithGroup(ReadGroup<T>& s) {
 template class FastxParser<ReadSeq>;
 template class FastxParser<ReadQual>;
 template class FastxParser<ReadPair>;
+template class FastxParser<ReadQualPair>;
 }
