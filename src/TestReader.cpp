@@ -81,7 +81,6 @@ int main(int argc, char* argv[]) {
               }
             }
           }
-          //parser.finishedWithGroup(rg);
         } else {
           break;
         }
@@ -99,7 +98,7 @@ int main(int argc, char* argv[]) {
     b.G += counters[i].G;
     b.T += counters[i].T;
   }
-  std::cerr << "#A = " << b.A << '\n';
+  std::cerr << "\n#A = " << b.A << '\n';
   std::cerr << "#C = " << b.C << '\n';
   std::cerr << "#G = " << b.G << '\n';
   std::cerr << "#T = " << b.T << '\n';

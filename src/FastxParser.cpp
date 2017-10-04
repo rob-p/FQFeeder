@@ -1,4 +1,5 @@
 #include "FastxParser.hpp"
+#include "FastxParserThreadUtils.hpp"
 
 #include "fcntl.h"
 #include "unistd.h"
@@ -105,6 +106,9 @@ void parseReads(
     moodycamel::ConcurrentQueue<std::unique_ptr<ReadChunk<T>>>&
         seqContainerQueue_,
     moodycamel::ConcurrentQueue<std::unique_ptr<ReadChunk<T>>>& readQueue_) {
+
+  using fastx_parser::thread_utils::MIN_BACKOFF_ITERS;
+  auto curMaxDelay = MIN_BACKOFF_ITERS;
   kseq_t* seq;
   T* s;
   uint32_t fn{0};
@@ -112,6 +116,7 @@ void parseReads(
     auto file = inputStreams[fn];
     std::unique_ptr<ReadChunk<T>> local;
     while (!seqContainerQueue_.try_dequeue(*cCont, local)) {
+      fastx_parser::thread_utils::backoffOrYield(curMaxDelay);
       std::cerr << "couldn't dequeue read chunk\n";
     }
     size_t numObtained{local->size()};
@@ -131,12 +136,16 @@ void parseReads(
 
       // If we've filled the local vector, then dump to the concurrent queue
       if (numWaiting == numObtained) {
+        curMaxDelay = MIN_BACKOFF_ITERS;
         while (!readQueue_.try_enqueue(std::move(local))) {
+          fastx_parser::thread_utils::backoffOrYield(curMaxDelay);
         }
         numWaiting = 0;
         numObtained = 0;
         // And get more empty reads
+        curMaxDelay = MIN_BACKOFF_ITERS;
         while (!seqContainerQueue_.try_dequeue(*cCont, local)) {
+          fastx_parser::thread_utils::backoffOrYield(curMaxDelay);
         }
         numObtained = local->size();
       }
@@ -147,7 +156,9 @@ void parseReads(
     // then dump them here.
     if (numWaiting > 0) {
       local->have(numWaiting);
+      curMaxDelay = MIN_BACKOFF_ITERS;
       while (!readQueue_.try_enqueue(*pRead, std::move(local))) {
+        fastx_parser::thread_utils::backoffOrYield(curMaxDelay);
       }
       numWaiting = 0;
     }
@@ -169,6 +180,8 @@ void parseReadPair(
         seqContainerQueue_,
     moodycamel::ConcurrentQueue<std::unique_ptr<ReadChunk<T>>>& readQueue_) {
 
+  using fastx_parser::thread_utils::MIN_BACKOFF_ITERS;
+  size_t curMaxDelay = MIN_BACKOFF_ITERS;
   kseq_t* seq;
   kseq_t* seq2;
   T* s;
@@ -181,6 +194,7 @@ void parseReadPair(
 
     std::unique_ptr<ReadChunk<T>> local;
     while (!seqContainerQueue_.try_dequeue(*cCont, local)) {
+      fastx_parser::thread_utils::backoffOrYield(curMaxDelay);
       std::cerr << "couldn't dequeue read chunk\n";
     }
     size_t numObtained{local->size()};
@@ -204,12 +218,16 @@ void parseReadPair(
 
       // If we've filled the local vector, then dump to the concurrent queue
       if (numWaiting == numObtained) {
+        curMaxDelay = MIN_BACKOFF_ITERS;
         while (!readQueue_.try_enqueue(std::move(local))) {
+          fastx_parser::thread_utils::backoffOrYield(curMaxDelay);
         }
         numWaiting = 0;
         numObtained = 0;
         // And get more empty reads
+        curMaxDelay = MIN_BACKOFF_ITERS;
         while (!seqContainerQueue_.try_dequeue(*cCont, local)) {
+          fastx_parser::thread_utils::backoffOrYield(curMaxDelay);
         }
         numObtained = local->size();
       }
@@ -221,7 +239,9 @@ void parseReadPair(
     // then dump them here.
     if (numWaiting > 0) {
       local->have(numWaiting);
+      curMaxDelay = MIN_BACKOFF_ITERS;
       while (!readQueue_.try_enqueue(*pRead, std::move(local))) {
+        fastx_parser::thread_utils::backoffOrYield(curMaxDelay);
       }
       numWaiting = 0;
     }
@@ -285,10 +305,12 @@ template <> bool FastxParser<ReadPair>::start() {
 
 template <typename T> bool FastxParser<T>::refill(ReadGroup<T>& seqs) {
   finishedWithGroup(seqs);
+  auto curMaxDelay = fastx_parser::thread_utils::MIN_BACKOFF_ITERS;
   while (numParsing_ > 0) {
     if (readQueue_.try_dequeue(seqs.consumerToken(), seqs.chunkPtr())) {
       return true;
     }
+    fastx_parser::thread_utils::backoffOrYield(curMaxDelay);
   }
   return readQueue_.try_dequeue(seqs.consumerToken(), seqs.chunkPtr());
 }
