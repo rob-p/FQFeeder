@@ -6,6 +6,7 @@
 #include <atomic>
 #include <cstdio>
 #include <cstdlib>
+#include <stdexcept>
 #include <iostream>
 #include <poll.h>
 #include <thread>
@@ -152,6 +153,10 @@ void parseReads(
       ksv = kseq_read(seq);
     }
 
+    if (ksv == -3) {
+      throw std::range_error("Error reading from the FASTA/Q stream. Make sure the file is valid.");
+    }
+
     // If we hit the end of the file and have any reads in our local buffer
     // then dump them here.
     if (numWaiting > 0) {
@@ -233,6 +238,10 @@ void parseReadPair(
       }
       ksv = kseq_read(seq);
       ksv2 = kseq_read(seq2);
+    }
+
+    if (ksv == -3 or ksv2 == -3) {
+      throw std::range_error("Error reading from the FASTA/Q stream. Make sure the file is valid.");
     }
 
     // If we hit the end of the file and have any reads in our local buffer
