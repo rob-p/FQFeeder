@@ -91,6 +91,9 @@ int main(int argc, char* argv[]) {
   for (auto& t : readers) {
     t.join();
   }
+
+  parser.stop();
+
   Bases b = {0, 0, 0, 0};
   for (size_t i = 0; i < nt; ++i) {
     b.A += counters[i].A;
