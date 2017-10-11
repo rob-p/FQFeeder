@@ -56,6 +56,14 @@ while (parser.refill(rg)) {
 }
 ```
 
+Once you've finished processing the reads, you call the `stop()` function of the FastxParser, like so:
+
+```{c++}
+parser.stop();
+```
+
+**Note** : The purpose of the stop function is to join all of the underlying parsing threads, and to report any exceptions that were encountered (e.g. unexpected end-of-file, corrupt gzip archive, etc.) up the call chain.  Hence, the `stop()` method *may throw exceptions* (specifically an `std::range_error`), and so you may wish to wrap it in a try-catch block to catch and handle these if you don't want them to propagate up the call stack.  *If you forget* to call `stop()`, it will be automatically called by the parser's destructor.  However, it is not recommended to do this.  Since destructors, generally, should not throw exceptions, any exceptions raised by `stop()` when called from the destructor will be caught and printed, *and then a call to* `std::exit(-1)` *will be made*.  Thus, if exceptions have occured, and `stop()` has not been called, the destruction of the parser will terminate the program.  To remind the user that failing to call `stop()` is bad practice and against the API usage of this library, an annyoing message will be printed from the destructor in the case that it has not been called before the parser goes out of scope.
+
 That's it! You can do this from as many threads as you want (assuming you specified the correct number
 in the `FastxParser` constructor). The `refill()` function will return false when there are 
 no more reads to be parsed.  Using the single-end parser is almost identical, except that you get back
