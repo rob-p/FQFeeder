@@ -154,11 +154,12 @@ int parseReads(
   uint32_t fn{0};
   while (workQueue.try_dequeue(fn)) {
     auto file = inputStreams[fn];
+    std::cerr << "PROCESSING " << file << "\n";
     std::unique_ptr<ReadChunk<T>> local;
     while (!seqContainerQueue_.try_dequeue(*cCont, local)) {
       fastx_parser::thread_utils::backoffOrYield(curMaxDelay);
       // Think of a way to do this that wouldn't be loud (or would allow a user-definable logging mechanism)
-      // std::cerr << "couldn't dequeue read chunk\n";
+      //std::cerr << "couldn't dequeue read chunk\n";
     }
     size_t numObtained{local->size()};
     // open the file and init the parser
@@ -166,6 +167,7 @@ int parseReads(
 
     // The number of reads we have in the local vector
     size_t numWaiting{0};
+    bool holdingContainer{false};
 
     seq = kseq_init(fp);
     int ksv = kseq_read(seq);
@@ -188,6 +190,7 @@ int parseReads(
         while (!seqContainerQueue_.try_dequeue(*cCont, local)) {
           fastx_parser::thread_utils::backoffOrYield(curMaxDelay);
         }
+        holdingContainer = true;
         numObtained = local->size();
       }
       ksv = kseq_read(seq);
@@ -196,7 +199,10 @@ int parseReads(
     if (ksv == -3) {
       --numParsing;
       return -3;
-    }
+    } else if (ksv < -1) {
+      --numParsing;
+      return ksv;
+     }
 
     // If we hit the end of the file and have any reads in our local buffer
     // then dump them here.
@@ -207,7 +213,13 @@ int parseReads(
         fastx_parser::thread_utils::backoffOrYield(curMaxDelay);
       }
       numWaiting = 0;
+    } else if (holdingContainer){
+      curMaxDelay = MIN_BACKOFF_ITERS;
+      while (!seqContainerQueue_.try_enqueue(std::move(local))) {
+        fastx_parser::thread_utils::backoffOrYield(curMaxDelay);
+      }
     }
+
     // destroy the parser and close the file
     kseq_destroy(seq);
     gzclose(fp);
@@ -252,6 +264,7 @@ int parseReadPair(
 
     // The number of reads we have in the local vector
     size_t numWaiting{0};
+    bool holdingContainer{false};
 
     seq = kseq_init(fp);
     seq2 = kseq_init(fp2);
@@ -277,6 +290,7 @@ int parseReadPair(
         while (!seqContainerQueue_.try_dequeue(*cCont, local)) {
           fastx_parser::thread_utils::backoffOrYield(curMaxDelay);
         }
+        holdingContainer = true;
         numObtained = local->size();
       }
       ksv = kseq_read(seq);
@@ -300,7 +314,13 @@ int parseReadPair(
         fastx_parser::thread_utils::backoffOrYield(curMaxDelay);
       }
       numWaiting = 0;
+    } else if (holdingContainer){
+      curMaxDelay = MIN_BACKOFF_ITERS;
+      while (!seqContainerQueue_.try_enqueue(std::move(local))) {
+        fastx_parser::thread_utils::backoffOrYield(curMaxDelay);
+      }
     }
+
     // destroy the parser and close the file
     kseq_destroy(seq);
     gzclose(fp);
