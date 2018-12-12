@@ -154,7 +154,6 @@ int parseReads(
   uint32_t fn{0};
   while (workQueue.try_dequeue(fn)) {
     auto file = inputStreams[fn];
-    std::cerr << "PROCESSING " << file << "\n";
     std::unique_ptr<ReadChunk<T>> local;
     while (!seqContainerQueue_.try_dequeue(*cCont, local)) {
       fastx_parser::thread_utils::backoffOrYield(curMaxDelay);
