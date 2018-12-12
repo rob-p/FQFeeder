@@ -166,7 +166,6 @@ int parseReads(
 
     // The number of reads we have in the local vector
     size_t numWaiting{0};
-    bool holdingContainer{false};
 
     seq = kseq_init(fp);
     int ksv = kseq_read(seq);
@@ -189,7 +188,6 @@ int parseReads(
         while (!seqContainerQueue_.try_dequeue(*cCont, local)) {
           fastx_parser::thread_utils::backoffOrYield(curMaxDelay);
         }
-        holdingContainer = true;
         numObtained = local->size();
       }
       ksv = kseq_read(seq);
@@ -212,7 +210,7 @@ int parseReads(
         fastx_parser::thread_utils::backoffOrYield(curMaxDelay);
       }
       numWaiting = 0;
-    } else if (holdingContainer){
+    } else if (numObtained > 0){
       curMaxDelay = MIN_BACKOFF_ITERS;
       while (!seqContainerQueue_.try_enqueue(std::move(local))) {
         fastx_parser::thread_utils::backoffOrYield(curMaxDelay);
@@ -263,7 +261,6 @@ int parseReadPair(
 
     // The number of reads we have in the local vector
     size_t numWaiting{0};
-    bool holdingContainer{false};
 
     seq = kseq_init(fp);
     seq2 = kseq_init(fp2);
@@ -289,7 +286,6 @@ int parseReadPair(
         while (!seqContainerQueue_.try_dequeue(*cCont, local)) {
           fastx_parser::thread_utils::backoffOrYield(curMaxDelay);
         }
-        holdingContainer = true;
         numObtained = local->size();
       }
       ksv = kseq_read(seq);
@@ -313,7 +309,7 @@ int parseReadPair(
         fastx_parser::thread_utils::backoffOrYield(curMaxDelay);
       }
       numWaiting = 0;
-    } else if (holdingContainer){
+    } else if (numObtained > 0){
       curMaxDelay = MIN_BACKOFF_ITERS;
       while (!seqContainerQueue_.try_enqueue(std::move(local))) {
         fastx_parser::thread_utils::backoffOrYield(curMaxDelay);
