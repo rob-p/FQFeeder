@@ -33,15 +33,20 @@ int main(int argc, char* argv[]) {
 
   std::vector<std::thread> readers;
   std::vector<Bases> counters(nt, {0, 0, 0, 0});
-
+  std::atomic<size_t> ctr{0};
   for (size_t i = 0; i < nt; ++i) {
     readers.emplace_back([&, i]() {
       auto rg = parser.getReadGroup();
+      size_t lctr{0};
+      size_t pctr{0};
       while (true) {
         if (parser.refill(rg)) {
           for (auto& seqPair : rg) {
+            ++lctr;
+
             auto& seq = seqPair.first;
             auto& seq2 = seqPair.second;
+
             size_t j = 0;
             //for (size_t j = 0; j < seq.seq.length(); ++j) {
               char c = seq.seq[j];
@@ -82,6 +87,14 @@ int main(int argc, char* argv[]) {
               }
            // }
           }
+          ctr += (lctr - pctr);
+          pctr = lctr;
+          if (lctr > 1000000) {
+              lctr = 0;
+              pctr = 0;
+              std::cout << "parsed " << ctr << " read pairs.\n";
+          }
+
         } else {
           break;
         }
@@ -102,6 +115,8 @@ int main(int argc, char* argv[]) {
     b.G += counters[i].G;
     b.T += counters[i].T;
   }
+  std::cerr << "\n";
+  std::cerr << "Parsed " << ctr << " total read pairs.\n";
   std::cerr << "\n#A = " << b.A << '\n';
   std::cerr << "#C = " << b.C << '\n';
   std::cerr << "#G = " << b.G << '\n';

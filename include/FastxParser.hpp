@@ -14,6 +14,8 @@ extern "C" {
 #include "kseq.h"
 }
 
+#include "kseq++.hpp"
+
 #include "concurrentqueue.h"
 
 #ifndef __FASTX_PARSER_PRECXX14_MAKE_UNIQUE__
@@ -73,13 +75,13 @@ struct ReadQual {
 };
 
 struct ReadPair {
-  ReadSeq first;
-  ReadSeq second;
+  klibpp::KSeq first;
+  klibpp::KSeq second;
 };
 
 struct ReadQualPair {
-  ReadQual first;
-  ReadQual second;
+  klibpp::KSeq first;
+  klibpp::KSeq second;
 };
 
 template <typename T> class ReadChunk {

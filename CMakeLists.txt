@@ -19,8 +19,12 @@ set (CPACK_SOURCE_PACKAGE_FILE_NAME
  
 set (CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} "${CMAKE_SOURCE_DIR}/cmake/Modules/")
 
-#set the required set the required compile flags
-set (CMAKE_CXX_FLAGS "-fPIC -pthread -O3 -DHAVE_ANSI_TERM -DHAVE_SSTREAM -Wall -pedantic -std=c++11")
+# it's time now — require >= C++17
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+# set the required set the required compile flags
+set (CMAKE_CXX_FLAGS "-fPIC -pthread -O3 -DHAVE_ANSI_TERM -DHAVE_SSTREAM -Wall -pedantic")
 
 ##
 # OSX is strange (some might say, stupid in this regard). Deal with it's quirkines here.

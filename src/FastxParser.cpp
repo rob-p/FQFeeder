@@ -244,10 +244,11 @@ int parseReadPair(
         seqContainerQueue_,
     moodycamel::ConcurrentQueue<std::unique_ptr<ReadChunk<T>>>& readQueue_) {
 
+  using namespace klibpp;
   using fastx_parser::thread_utils::MIN_BACKOFF_ITERS;
   size_t curMaxDelay = MIN_BACKOFF_ITERS;
-  kseq_t* seq;
-  kseq_t* seq2;
+  //kseq_t* seq;
+  //kseq_t* seq2;
   T* s;
 
   uint32_t fn{0};
@@ -263,24 +264,25 @@ int parseReadPair(
       // std::cerr << "couldn't dequeue read chunk\n";
     }
     size_t numObtained{local->size()};
+
     // open the file and init the parser
-    auto fp = gzopen(file.c_str(), "r");
-    auto fp2 = gzopen(file2.c_str(), "r");
+    gzFile fp = gzopen(file.c_str(), "r");
+    gzFile fp2 = gzopen(file2.c_str(), "r");
 
     // The number of reads we have in the local vector
     size_t numWaiting{0};
 
-    seq = kseq_init(fp);
-    seq2 = kseq_init(fp2);
+    auto seq = make_kstream(fp, gzread, mode::in);
+    auto seq2 = make_kstream(fp2, gzread, mode::in);
 
-    int ksv = kseq_read(seq);
-    int ksv2 = kseq_read(seq2);
-    while (ksv >= 0 and ksv2 >= 0) {
+    //int ksv = kseq_read(seq);
+    //int ksv2 = kseq_read(seq2);
+    s = &((*local)[numWaiting]);
+    while ( (seq >> s->first) and (seq2 >> s->second) ) {//ksv >= 0 and ksv2 >= 0) {
 
-      s = &((*local)[numWaiting++]);
-      copyRecord(seq, &s->first);
-      copyRecord(seq2, &s->second);
-
+      //copyRecord(seq, &s->first);
+      //copyRecord(seq2, &s->second);
+      numWaiting++;
       // If we've filled the local vector, then dump to the concurrent queue
       if (numWaiting == numObtained) {
         curMaxDelay = MIN_BACKOFF_ITERS;
@@ -296,16 +298,32 @@ int parseReadPair(
         }
         numObtained = local->size();
       }
-      ksv = kseq_read(seq);
-      ksv2 = kseq_read(seq2);
+      s = &((*local)[numWaiting]);
+      //ksv = kseq_read(seq);
+      //ksv2 = kseq_read(seq2);
     }
 
-    if (ksv == -3 or ksv2 == -3) {
+    if (seq.err() or seq2.err()) { //ksv == -3 or ksv2 == -3) {
+
+      if (seq.fail()) {
+        std::cerr << "\nseq 1: \n";
+        std::cerr << "\tcounts() : " << seq.counts() << "\n";
+        std::cerr << "\terr() : " << seq.err() << "\n";
+        std::cerr << "\ttqs() : " << seq.tqs() << "\n";
+        std::cerr << "\teof() : " << seq.eof() << "\n";
+      }
+      if (seq2.fail()) {
+        std::cerr << "\nseq 2: \n";
+        std::cerr << "\tcounts() : " << seq2.counts() << "\n";
+        std::cerr << "\terr() : " << seq2.err() << "\n";
+        std::cerr << "\ttqs() : " << seq2.tqs() << "\n";
+        std::cerr << "\teof() : " << seq2.eof() << "\n";
+      }
       --numParsing;
       return -3;
-    } else if (ksv < -1 or ksv2 < -1) {
+    } else if (seq.tqs() or seq2.tqs()) {
       --numParsing;
-      return std::min(ksv, ksv2);
+      return -2;
     }
 
     // If we hit the end of the file and have any reads in our local buffer
@@ -324,9 +342,9 @@ int parseReadPair(
       }
     }
     // destroy the parser and close the file
-    kseq_destroy(seq);
+    //kseq_destroy(seq);
     gzclose(fp);
-    kseq_destroy(seq2);
+    //kseq_destroy(seq2);
     gzclose(fp2);
   }
 
