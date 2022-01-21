@@ -42,7 +42,8 @@ int main(int argc, char* argv[]) {
           for (auto& seqPair : rg) {
             auto& seq = seqPair.first;
             auto& seq2 = seqPair.second;
-            for (size_t j = 0; j < seq.seq.length(); ++j) {
+            size_t j = 0;
+            //for (size_t j = 0; j < seq.seq.length(); ++j) {
               char c = seq.seq[j];
               switch (c) {
               case 'A':
@@ -60,9 +61,9 @@ int main(int argc, char* argv[]) {
               default:
                 break;
               }
-            }
-            for (size_t j = 0; j < seq2.seq.length(); ++j) {
-              char c = seq2.seq[j];
+            //}
+            //for (size_t j = 0; j < seq2.seq.length(); ++j) {
+              c = seq2.seq[j];
               switch (c) {
               case 'A':
                 counters[i].A++;
@@ -79,7 +80,7 @@ int main(int argc, char* argv[]) {
               default:
                 break;
               }
-            }
+           // }
           }
         } else {
           break;
