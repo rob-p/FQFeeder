@@ -1,23 +1,16 @@
-// taken from:
-// https://biowize.wordpress.com/2012/03/02/parsing-fasta-files-with-c-kseq-h/
-#include "kseq.h"
+#include "kseq++.hpp"
 #include <vector>
 #include <iostream>
 #include <zlib.h>
-// STEP 1: declare the type of file handler and the read() function
-KSEQ_INIT(gzFile, gzread)
+
 struct Bases {
   uint32_t A, C, G, T;
 };
 
 int main(int argc, char* argv[]) {
-
-  gzFile fp;
-  gzFile fp2;
-  kseq_t* seq;
-  kseq_t* seq2;
-  int l, l2;
-  
+  using namespace klibpp;
+  gzFile fp = nullptr;
+  gzFile fp2 = nullptr;
 
    if (argc == 1) {
        std::cerr << "usage: test_parser fa1 fb1 ... fa2 fb2 ...";
@@ -40,18 +33,26 @@ int main(int argc, char* argv[]) {
    Bases counter = {0, 0, 0, 0};
    size_t rnum{0};
    for (size_t i = 0; i < numPairs; ++i) {
-       fp = gzopen(files[i].c_str(), "r");  // STEP 2: open the file handler
-       fp2 = gzopen(files2[i].c_str(), "r"); // STEP 2: open the file handler
-       seq = kseq_init(fp);        // STEP 3: initialize seq
-       seq2 = kseq_init(fp2);      // STEP 3: initialize seq
-       while ((l = kseq_read(seq)) >= 0 and
-              (l2 = kseq_read(seq2)) >= 0) { // STEP 4: read sequence
+        // open the file and init the parser
+       gzFile fp = gzopen(files[i].c_str(), "r");
+       gzFile fp2 = gzopen(files[i].c_str(), "r");
+
+       auto seq = make_kstream(fp, gzread, mode::in);
+       auto seq2 = make_kstream(fp2, gzread, mode::in);
+
+       KSeq r1;
+       KSeq r2;
+
+       while ( (seq >> r1) and (seq2 >> r2) ) {
            ++rnum;
+           /*
            if (rnum % 1000000 == 0) {
                std::cerr << rnum << '\n';
            }
-           for (size_t j = 0; j < seq->seq.l; ++j) {
-               char c = seq->seq.s[j];
+           */
+           if (r1.seq.length() > 0) {
+               size_t j = 0;
+               char c = r1.seq[j];
                switch (c) {
                case 'A':
                    counter.A++;
@@ -69,8 +70,9 @@ int main(int argc, char* argv[]) {
                    break;
                }
            }
-           for (size_t j = 0; j < seq2->seq.l; ++j) {
-               char c = seq2->seq.s[j];
+           if (r2.seq.length() > 0) {
+               size_t j = 0;
+               char c = r2.seq[j];
                switch (c) {
                case 'A':
                    counter.A++;
@@ -90,14 +92,15 @@ int main(int argc, char* argv[]) {
            }
        }
    }
+
+  std::cerr << "\n";
+  std::cerr << "Parsed " << rnum << " total read pairs.\n";
   std::cerr << "#A = " << counter.A << '\n';
   std::cerr << "#C = " << counter.C << '\n';
   std::cerr << "#G = " << counter.G << '\n';
   std::cerr << "#T = " << counter.T << '\n';
 
-  kseq_destroy(seq);  // STEP 5: destroy seq
-  kseq_destroy(seq2); // STEP 5: destroy seq
-  gzclose(fp);        // STEP 6: close the file handler
-  gzclose(fp2);       // STEP 6: close the file handler
+  gzclose(fp);
+  gzclose(fp2);
   return 0;
 }

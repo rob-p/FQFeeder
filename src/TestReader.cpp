@@ -92,7 +92,7 @@ int main(int argc, char* argv[]) {
           if (lctr > 1000000) {
               lctr = 0;
               pctr = 0;
-              std::cout << "parsed " << ctr << " read pairs.\n";
+              //std::cout << "parsed " << ctr << " read pairs.\n";
           }
 
         } else {
