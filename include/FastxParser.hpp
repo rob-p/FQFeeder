@@ -77,6 +77,11 @@ struct ReadQualPair {
   klibpp::KSeq second;
 };
 
+struct ChunkFragOffset {
+  uint32_t file_idx{0};
+  uint32_t frag_idx{0};
+};
+
 template <typename T> class ReadChunk {
 public:
   ReadChunk(size_t want) : group_(want), want_(want), have_(want) {}
@@ -87,10 +92,20 @@ public:
   typename std::vector<T>::iterator begin() { return group_.begin(); }
   typename std::vector<T>::iterator end() { return group_.begin() + have_; }
 
+  void set_chunk_frag_offset(uint32_t file_num, uint64_t frag_num) {
+    frag_offset_.file_idx = file_num;
+    frag_offset_.frag_idx = frag_num;
+  }
+
+  ChunkFragOffset chunk_frag_offset() const { 
+    return frag_offset_;
+  }
+
 private:
   std::vector<T> group_;
   size_t want_;
   size_t have_;
+  ChunkFragOffset frag_offset_;
 };
 
 template <typename T> class ReadGroup {
@@ -113,6 +128,9 @@ public:
   }
   void setChunkEmpty() { chunk_.release(); }
   bool empty() const { return chunk_.get() == nullptr; }
+  ChunkFragOffset chunk_frag_offset() const { 
+    return chunk_->chunk_frag_offset();
+  }
 
 private:
   std::unique_ptr<ReadChunk<T>> chunk_{nullptr};

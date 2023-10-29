@@ -163,6 +163,11 @@ int parse_reads(
     // open the file and init the parser
     gzFile fp = gzopen(file.c_str(), "r");
 
+    // we start off with the 0-th fragment in this 
+    // file.
+    uint64_t frag_id{0};
+    uint64_t first_frag_of_chunk{frag_id};
+
     // The number of reads we have in the local vector
     size_t numWaiting{0};
 
@@ -170,13 +175,16 @@ int parse_reads(
 
     s = &((*local)[numWaiting]);
     while (seq >> *s) { // ksv >= 0
+      frag_id++;
       numWaiting++;
       // If we've filled the local vector, then dump to the concurrent queue
       if (numWaiting == numObtained) {
         curMaxDelay = MIN_BACKOFF_ITERS;
+        local->set_chunk_frag_offset(fn, first_frag_of_chunk);
         while (!readQueue_.try_enqueue(std::move(local))) {
           fastx_parser::thread_utils::backoffOrYield(curMaxDelay);
         }
+        first_frag_of_chunk = frag_id;
         numWaiting = 0;
         numObtained = 0;
         // And get more empty reads
@@ -204,6 +212,7 @@ int parse_reads(
     // then dump them here.
     if (numWaiting > 0) {
       local->have(numWaiting);
+      local->set_chunk_frag_offset(fn, first_frag_of_chunk);
       curMaxDelay = MIN_BACKOFF_ITERS;
       while (!readQueue_.try_enqueue(*pRead, std::move(local))) {
         fastx_parser::thread_utils::backoffOrYield(curMaxDelay);
@@ -211,6 +220,7 @@ int parse_reads(
       numWaiting = 0;
     } else if (numObtained > 0) {
       curMaxDelay = MIN_BACKOFF_ITERS;
+      local->set_chunk_frag_offset(fn, first_frag_of_chunk);
       while (!seqContainerQueue_.try_enqueue(std::move(local))) {
         fastx_parser::thread_utils::backoffOrYield(curMaxDelay);
       }
@@ -257,6 +267,11 @@ int parse_read_pairs(
     gzFile fp = gzopen(file.c_str(), "r");
     gzFile fp2 = gzopen(file2.c_str(), "r");
 
+    // we start off with the 0-th fragment in this 
+    // file.
+    uint64_t frag_id{0};
+    uint64_t first_frag_of_chunk{frag_id};
+
     // The number of reads we have in the local vector
     size_t numWaiting{0};
 
@@ -266,13 +281,16 @@ int parse_read_pairs(
     s = &((*local)[numWaiting]);
     while ((seq >> s->first) and
            (seq2 >> s->second)) { // ksv >= 0 and ksv2 >= 0) {
+      frag_id++;
       numWaiting++;
       // If we've filled the local vector, then dump to the concurrent queue
       if (numWaiting == numObtained) {
         curMaxDelay = MIN_BACKOFF_ITERS;
+        local->set_chunk_frag_offset(fn, first_frag_of_chunk);
         while (!readQueue_.try_enqueue(std::move(local))) {
           fastx_parser::thread_utils::backoffOrYield(curMaxDelay);
         }
+        first_frag_of_chunk = frag_id;
         numWaiting = 0;
         numObtained = 0;
         // And get more empty reads
@@ -300,6 +318,7 @@ int parse_read_pairs(
     // then dump them here.
     if (numWaiting > 0) {
       local->have(numWaiting);
+      local->set_chunk_frag_offset(fn, first_frag_of_chunk);
       curMaxDelay = MIN_BACKOFF_ITERS;
       while (!readQueue_.try_enqueue(*pRead, std::move(local))) {
         fastx_parser::thread_utils::backoffOrYield(curMaxDelay);
@@ -307,6 +326,7 @@ int parse_read_pairs(
       numWaiting = 0;
     } else if (numObtained > 0) {
       curMaxDelay = MIN_BACKOFF_ITERS;
+      local->set_chunk_frag_offset(fn, first_frag_of_chunk);
       while (!seqContainerQueue_.try_enqueue(std::move(local))) {
         fastx_parser::thread_utils::backoffOrYield(curMaxDelay);
       }
