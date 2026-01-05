@@ -77,6 +77,27 @@ struct ReadQualPair {
   klibpp::KSeq second;
 };
 
+// Triplet types for protocols with 3 synchronized files
+struct ReadTriple {
+  klibpp::KSeq first;
+  klibpp::KSeq second;
+  klibpp::KSeq third;
+};
+
+struct ReadQualTriple {
+  klibpp::KSeq first;
+  klibpp::KSeq second;
+  klibpp::KSeq third;
+};
+
+// Intermediate structure for parallel parsing - holds a single read with its rank
+template <typename T> struct ParsedSingleRead {
+  T read;
+  uint64_t rank;      // position in original file (for synchronization)
+  uint32_t file_idx;  // which file-set this belongs to
+  bool is_end{false}; // signals end of file
+};
+
 struct ChunkFragOffset {
   uint32_t file_idx{0};
   uint32_t frag_idx{0};
@@ -145,7 +166,13 @@ public:
 
   FastxParser(std::vector<std::string> files, std::vector<std::string> files2,
               uint32_t numConsumers, uint32_t numParsers = 1,
-              uint32_t chunkSize = 1000);
+              uint32_t chunkSize = 1000, bool parallelParsing = true);
+
+  // Triplet constructor for protocols with 3 synchronized files
+  FastxParser(std::vector<std::string> files, std::vector<std::string> files2,
+              std::vector<std::string> files3, uint32_t numConsumers,
+              uint32_t numParsers = 1, uint32_t chunkSize = 1000,
+              bool parallelParsing = true);
   ~FastxParser();
   bool start();
   bool stop();
@@ -159,8 +186,10 @@ private:
 
   std::vector<std::string> inputStreams_;
   std::vector<std::string> inputStreams2_;
+  std::vector<std::string> inputStreams3_;  // For triplet files
   uint32_t numParsers_;
   std::atomic<uint32_t> numParsing_;
+  bool parallelParsing_{true};  // Enable parallel parsing for multi-file modes
 
   // NOTE: Would like to use std::future<int> here instead, but that
   // solution doesn't seem to work.  It's unclear exactly why

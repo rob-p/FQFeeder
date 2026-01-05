@@ -13,6 +13,8 @@ $ENV{HOME}/lib)
 
 add_executable(test_parser ${TEST_SRCS}) 
 add_executable(test_kseq TestKseq.cpp)
+add_executable(test_parser_triplet TestTriplet.cpp)
 
 target_link_libraries(test_parser pthread fqfeeder z)
 target_link_libraries(test_kseq pthread z)
+target_link_libraries(test_parser_triplet pthread fqfeeder z)
