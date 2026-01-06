@@ -759,16 +759,17 @@ template <> bool FastxParser<ReadPair>::start() {
                             3); // 2 parsers + 1 assembler per pair
       std::fill(threadResults_.begin(), threadResults_.end(), 0);
 
+      constexpr size_t local_chunk_size = 512;
       for (size_t fn = 0; fn < numFilePairs; ++fn) {
         // Create intermediate queues for this file pair
         auto queue1 = std::make_shared<moodycamel::ConcurrentQueue<
-            std::unique_ptr<ReadChunk<klibpp::KSeq>>>>(128);
+            std::unique_ptr<ReadChunk<klibpp::KSeq>>>>(local_chunk_size);
         auto queue2 = std::make_shared<moodycamel::ConcurrentQueue<
-            std::unique_ptr<ReadChunk<klibpp::KSeq>>>>(128);
+            std::unique_ptr<ReadChunk<klibpp::KSeq>>>>(local_chunk_size);
         auto recycleQueue1 = std::make_shared<moodycamel::ConcurrentQueue<
-            std::unique_ptr<ReadChunk<klibpp::KSeq>>>>(128);
+            std::unique_ptr<ReadChunk<klibpp::KSeq>>>>(local_chunk_size);
         auto recycleQueue2 = std::make_shared<moodycamel::ConcurrentQueue<
-            std::unique_ptr<ReadChunk<klibpp::KSeq>>>>(128);
+            std::unique_ptr<ReadChunk<klibpp::KSeq>>>>(local_chunk_size);
         auto done1 = std::make_shared<std::atomic<bool>>(false);
         auto done2 = std::make_shared<std::atomic<bool>>(false);
         auto numAssembling = std::make_shared<std::atomic<uint32_t>>(1);
