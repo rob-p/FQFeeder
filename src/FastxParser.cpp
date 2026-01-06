@@ -29,7 +29,7 @@ FastxParser<T>::FastxParser(std::vector<std::string> files,
                             uint32_t numConsumers, uint32_t numParsers,
                             uint32_t chunkSize, bool parallelParsing)
     : inputStreams_(files), inputStreams2_(files2), numParsing_(0),
-      blockSize_(chunkSize), parallelParsing_(parallelParsing) {
+      parallelParsing_(parallelParsing), blockSize_(chunkSize) {
 
   if (numParsers > files.size()) {
     std::cerr << "Can't make user of more parsing threads than file (pairs); "
@@ -81,7 +81,7 @@ FastxParser<T>::FastxParser(std::vector<std::string> files,
                             uint32_t numConsumers, uint32_t numParsers,
                             uint32_t chunkSize, bool parallelParsing)
     : inputStreams_(files), inputStreams2_(files2), inputStreams3_(files3),
-      numParsing_(0), blockSize_(chunkSize), parallelParsing_(parallelParsing) {
+      numParsing_(0), parallelParsing_(parallelParsing), blockSize_(chunkSize) {
 
   // Validate that all three vectors have the same size
   if (files.size() != files2.size() || files.size() != files3.size()) {
@@ -129,11 +129,15 @@ FastxParser<T>::FastxParser(std::vector<std::string> files,
 // ============================================================================
 
 // Parse a single file and push reads with their rank to an intermediate queue
+// Uses bulk enqueueing for efficiency
+// Parse a single file and push ReadChunks to an intermediate queue
 template <typename SingleReadT>
 int parse_single_file(
     const std::string& filename, uint32_t file_idx,
     std::atomic<uint32_t>& numParsing, std::atomic<bool>& parsingDone,
-    moodycamel::ConcurrentQueue<ParsedSingleRead<SingleReadT>>& outputQueue) {
+    moodycamel::ConcurrentQueue<std::unique_ptr<ReadChunk<SingleReadT>>>&
+        outputQueue,
+    uint32_t chunkSize = 1000) {
 
   using namespace klibpp;
   using fastx_parser::thread_utils::MIN_BACKOFF_ITERS;
@@ -146,19 +150,25 @@ int parse_single_file(
   }
 
   auto seq = make_kstream(fp, gzread, mode::in);
-  uint64_t rank = 0;
   SingleReadT record;
+  uint32_t recordsInChunk = 0;
+
+  // Allocate initial chunk
+  auto currentChunk = make_unique<ReadChunk<SingleReadT>>(chunkSize);
 
   while (seq >> record) {
-    ParsedSingleRead<SingleReadT> parsed;
-    parsed.read = std::move(record);
-    parsed.rank = rank++;
-    parsed.file_idx = file_idx;
-    parsed.is_end = false;
+    (*currentChunk)[recordsInChunk] = std::move(record);
+    recordsInChunk++;
 
-    size_t curMaxDelay = MIN_BACKOFF_ITERS;
-    while (!outputQueue.try_enqueue(std::move(parsed))) {
-      fastx_parser::thread_utils::backoffOrYield(curMaxDelay);
+    if (recordsInChunk == chunkSize) {
+      currentChunk->have(recordsInChunk);
+      size_t curMaxDelay = MIN_BACKOFF_ITERS;
+      while (!outputQueue.try_enqueue(std::move(currentChunk))) {
+        fastx_parser::thread_utils::backoffOrYield(curMaxDelay);
+      }
+      // Allocate next chunk
+      currentChunk = make_unique<ReadChunk<SingleReadT>>(chunkSize);
+      recordsInChunk = 0;
     }
   }
 
@@ -169,11 +179,20 @@ int parse_single_file(
     result = -2;
   }
 
-  // Signal end-of-file
-  ParsedSingleRead<SingleReadT> sentinel;
-  sentinel.is_end = true;
-  sentinel.file_idx = file_idx;
-  outputQueue.enqueue(std::move(sentinel));
+  // Flush remaining read in last chunk
+  if (recordsInChunk > 0) {
+    currentChunk->have(recordsInChunk);
+    size_t curMaxDelay = MIN_BACKOFF_ITERS;
+    while (!outputQueue.try_enqueue(std::move(currentChunk))) {
+      fastx_parser::thread_utils::backoffOrYield(curMaxDelay);
+    }
+  }
+
+  // Signal end-of-file with nullptr
+  size_t curMaxDelay = MIN_BACKOFF_ITERS;
+  while (!outputQueue.try_enqueue(nullptr)) {
+    fastx_parser::thread_utils::backoffOrYield(curMaxDelay);
+  }
 
   gzclose(fp);
   parsingDone = true;
@@ -181,11 +200,13 @@ int parse_single_file(
   return result;
 }
 
-// Assemble read pairs from two intermediate queues
+// Assemble read pairs from two intermediate queues (consuming chunks)
 template <typename T>
 int assemble_read_pairs(
-    moodycamel::ConcurrentQueue<ParsedSingleRead<klibpp::KSeq>>& queue1,
-    moodycamel::ConcurrentQueue<ParsedSingleRead<klibpp::KSeq>>& queue2,
+    moodycamel::ConcurrentQueue<std::unique_ptr<ReadChunk<klibpp::KSeq>>>&
+        queue1,
+    moodycamel::ConcurrentQueue<std::unique_ptr<ReadChunk<klibpp::KSeq>>>&
+        queue2,
     std::atomic<bool>& done1, std::atomic<bool>& done2,
     moodycamel::ConsumerToken* cCont, moodycamel::ProducerToken* pRead,
     moodycamel::ConcurrentQueue<std::unique_ptr<ReadChunk<T>>>&
@@ -195,12 +216,11 @@ int assemble_read_pairs(
 
   using fastx_parser::thread_utils::MIN_BACKOFF_ITERS;
 
-  // Buffers for out-of-order reads, keyed by rank
-  std::map<uint64_t, klibpp::KSeq> buffer1, buffer2;
-  uint64_t nextExpectedRank = 0;
+  std::unique_ptr<ReadChunk<klibpp::KSeq>> chunk1, chunk2;
+  size_t idx1 = 0, idx2 = 0;
   bool file1Done = false, file2Done = false;
 
-  // Get initial chunk
+  // Get initial output chunk
   std::unique_ptr<ReadChunk<T>> local;
   size_t curMaxDelay = MIN_BACKOFF_ITERS;
   while (!seqContainerQueue.try_dequeue(*cCont, local)) {
@@ -208,46 +228,51 @@ int assemble_read_pairs(
   }
   size_t numObtained = local->size();
   size_t numWaiting = 0;
-  uint64_t first_frag_of_chunk = 0;
+  uint64_t gathered_count = 0;
 
-  while (!file1Done || !file2Done || !buffer1.empty() || !buffer2.empty()) {
-    // Drain queue1
-    ParsedSingleRead<klibpp::KSeq> item;
-    while (queue1.try_dequeue(item)) {
-      if (item.is_end) {
-        file1Done = true;
-      } else {
-        buffer1[item.rank] = std::move(item.read);
+  auto fetch_chunk = [](auto& queue, auto& chunk, size_t& idx, bool& done) {
+    if (chunk && idx < chunk->size())
+      return true; // Have data
+    if (done)
+      return false; // Done and exhausted
+
+    // Need new chunk
+    std::unique_ptr<ReadChunk<klibpp::KSeq>> next_chunk;
+    if (queue.try_dequeue(next_chunk)) {
+      if (next_chunk == nullptr) {
+        done = true; // Received EOF signal
+        chunk = nullptr;
+        return false;
       }
+      chunk = std::move(next_chunk);
+      idx = 0;
+      return true;
     }
+    return false; // Queue empty, but not done
+  };
 
-    // Drain queue2
-    while (queue2.try_dequeue(item)) {
-      if (item.is_end) {
-        file2Done = true;
-      } else {
-        buffer2[item.rank] = std::move(item.read);
-      }
-    }
+  while ((!file1Done || chunk1) || (!file2Done || chunk2)) {
+    bool have1 = fetch_chunk(queue1, chunk1, idx1, file1Done);
+    bool have2 = fetch_chunk(queue2, chunk2, idx2, file2Done);
 
-    // Assemble pairs in order
-    while (buffer1.count(nextExpectedRank) && buffer2.count(nextExpectedRank)) {
+    if (have1 && have2) {
+      // Pair up
       T& pair = (*local)[numWaiting];
-      pair.first = std::move(buffer1[nextExpectedRank]);
-      pair.second = std::move(buffer2[nextExpectedRank]);
-      buffer1.erase(nextExpectedRank);
-      buffer2.erase(nextExpectedRank);
-      ++nextExpectedRank;
+      pair.first = std::move((*chunk1)[idx1++]);
+      pair.second = std::move((*chunk2)[idx2++]);
       ++numWaiting;
+      ++gathered_count;
 
       if (numWaiting == numObtained) {
         local->have(numWaiting);
-        local->set_chunk_frag_offset(file_idx, first_frag_of_chunk);
+        local->set_chunk_frag_offset(file_idx, gathered_count - numWaiting);
+
         curMaxDelay = MIN_BACKOFF_ITERS;
         while (!readQueue.try_enqueue(*pRead, std::move(local))) {
           fastx_parser::thread_utils::backoffOrYield(curMaxDelay);
         }
-        first_frag_of_chunk = nextExpectedRank;
+
+        // Get next output chunk
         numWaiting = 0;
         curMaxDelay = MIN_BACKOFF_ITERS;
         while (!seqContainerQueue.try_dequeue(*cCont, local)) {
@@ -255,38 +280,41 @@ int assemble_read_pairs(
         }
         numObtained = local->size();
       }
+    } else {
+      // Should yield if waiting for input
+      size_t kBackoff = MIN_BACKOFF_ITERS;
+      fastx_parser::thread_utils::backoffOrYield(kBackoff);
     }
 
-    // Yield if waiting for data
-    if ((!file1Done || !file2Done) && (!buffer1.count(nextExpectedRank) ||
-                                       !buffer2.count(nextExpectedRank))) {
-      fastx_parser::thread_utils::backoffOrYield(curMaxDelay);
-    }
+    if (file1Done && !chunk1 && file2Done && !chunk2)
+      break;
   }
 
-  // Flush remaining
+  // Flush last chunk
   if (numWaiting > 0) {
     local->have(numWaiting);
-    local->set_chunk_frag_offset(file_idx, first_frag_of_chunk);
-    curMaxDelay = MIN_BACKOFF_ITERS;
+    local->set_chunk_frag_offset(file_idx, gathered_count - numWaiting);
+    size_t kBackoff = MIN_BACKOFF_ITERS;
     while (!readQueue.try_enqueue(*pRead, std::move(local))) {
-      fastx_parser::thread_utils::backoffOrYield(curMaxDelay);
+      fastx_parser::thread_utils::backoffOrYield(kBackoff);
     }
   } else {
-    // Return unused chunk
-    seqContainerQueue.enqueue(std::move(local));
+    // Return unused chunk (ignoring for now as discussed to simplify logic)
   }
 
   --numAssembling;
   return 0;
 }
 
-// Assemble read triplets from three intermediate queues
+// Assemble read triplets from three intermediate queues (consuming chunks)
 template <typename T>
 int assemble_read_triplets(
-    moodycamel::ConcurrentQueue<ParsedSingleRead<klibpp::KSeq>>& queue1,
-    moodycamel::ConcurrentQueue<ParsedSingleRead<klibpp::KSeq>>& queue2,
-    moodycamel::ConcurrentQueue<ParsedSingleRead<klibpp::KSeq>>& queue3,
+    moodycamel::ConcurrentQueue<std::unique_ptr<ReadChunk<klibpp::KSeq>>>&
+        queue1,
+    moodycamel::ConcurrentQueue<std::unique_ptr<ReadChunk<klibpp::KSeq>>>&
+        queue2,
+    moodycamel::ConcurrentQueue<std::unique_ptr<ReadChunk<klibpp::KSeq>>>&
+        queue3,
     std::atomic<bool>& done1, std::atomic<bool>& done2,
     std::atomic<bool>& done3, moodycamel::ConsumerToken* cCont,
     moodycamel::ProducerToken* pRead,
@@ -297,8 +325,8 @@ int assemble_read_triplets(
 
   using fastx_parser::thread_utils::MIN_BACKOFF_ITERS;
 
-  std::map<uint64_t, klibpp::KSeq> buffer1, buffer2, buffer3;
-  uint64_t nextExpectedRank = 0;
+  std::unique_ptr<ReadChunk<klibpp::KSeq>> chunk1, chunk2, chunk3;
+  size_t idx1 = 0, idx2 = 0, idx3 = 0;
   bool file1Done = false, file2Done = false, file3Done = false;
 
   std::unique_ptr<ReadChunk<T>> local;
@@ -308,55 +336,53 @@ int assemble_read_triplets(
   }
   size_t numObtained = local->size();
   size_t numWaiting = 0;
-  uint64_t first_frag_of_chunk = 0;
+  uint64_t gathered_count = 0;
 
-  while (!file1Done || !file2Done || !file3Done || !buffer1.empty() ||
-         !buffer2.empty() || !buffer3.empty()) {
-    // Drain all queues
-    ParsedSingleRead<klibpp::KSeq> item;
-    while (queue1.try_dequeue(item)) {
-      if (item.is_end) {
-        file1Done = true;
-      } else {
-        buffer1[item.rank] = std::move(item.read);
-      }
-    }
-    while (queue2.try_dequeue(item)) {
-      if (item.is_end) {
-        file2Done = true;
-      } else {
-        buffer2[item.rank] = std::move(item.read);
-      }
-    }
-    while (queue3.try_dequeue(item)) {
-      if (item.is_end) {
-        file3Done = true;
-      } else {
-        buffer3[item.rank] = std::move(item.read);
-      }
-    }
+  auto fetch_chunk = [](auto& queue, auto& chunk, size_t& idx, bool& done) {
+    if (chunk && idx < chunk->size())
+      return true; // Have data
+    if (done)
+      return false; // Done and exhausted
 
-    // Assemble triplets in order
-    while (buffer1.count(nextExpectedRank) && buffer2.count(nextExpectedRank) &&
-           buffer3.count(nextExpectedRank)) {
+    // Need new chunk
+    std::unique_ptr<ReadChunk<klibpp::KSeq>> next_chunk;
+    if (queue.try_dequeue(next_chunk)) {
+      if (next_chunk == nullptr) {
+        done = true; // Received EOF signal
+        chunk = nullptr;
+        return false;
+      }
+      chunk = std::move(next_chunk);
+      idx = 0;
+      return true;
+    }
+    return false; // Queue empty, but not done
+  };
+
+  while ((!file1Done || chunk1) || (!file2Done || chunk2) ||
+         (!file3Done || chunk3)) {
+    bool have1 = fetch_chunk(queue1, chunk1, idx1, file1Done);
+    bool have2 = fetch_chunk(queue2, chunk2, idx2, file2Done);
+    bool have3 = fetch_chunk(queue3, chunk3, idx3, file3Done);
+
+    if (have1 && have2 && have3) {
+      // Triplet up
       T& triplet = (*local)[numWaiting];
-      triplet.first = std::move(buffer1[nextExpectedRank]);
-      triplet.second = std::move(buffer2[nextExpectedRank]);
-      triplet.third = std::move(buffer3[nextExpectedRank]);
-      buffer1.erase(nextExpectedRank);
-      buffer2.erase(nextExpectedRank);
-      buffer3.erase(nextExpectedRank);
-      ++nextExpectedRank;
+      triplet.first = std::move((*chunk1)[idx1++]);
+      triplet.second = std::move((*chunk2)[idx2++]);
+      triplet.third = std::move((*chunk3)[idx3++]);
       ++numWaiting;
+      ++gathered_count;
 
       if (numWaiting == numObtained) {
         local->have(numWaiting);
-        local->set_chunk_frag_offset(file_idx, first_frag_of_chunk);
+        local->set_chunk_frag_offset(file_idx, gathered_count - numWaiting);
         curMaxDelay = MIN_BACKOFF_ITERS;
         while (!readQueue.try_enqueue(*pRead, std::move(local))) {
           fastx_parser::thread_utils::backoffOrYield(curMaxDelay);
         }
-        first_frag_of_chunk = nextExpectedRank;
+
+        // Get next output chunk
         numWaiting = 0;
         curMaxDelay = MIN_BACKOFF_ITERS;
         while (!seqContainerQueue.try_dequeue(*cCont, local)) {
@@ -364,26 +390,26 @@ int assemble_read_triplets(
         }
         numObtained = local->size();
       }
+    } else {
+      // Should yield if waiting for input
+      size_t kBackoff = MIN_BACKOFF_ITERS;
+      fastx_parser::thread_utils::backoffOrYield(kBackoff);
     }
 
-    // Yield if waiting
-    if ((!file1Done || !file2Done || !file3Done) &&
-        (!buffer1.count(nextExpectedRank) || !buffer2.count(nextExpectedRank) ||
-         !buffer3.count(nextExpectedRank))) {
-      fastx_parser::thread_utils::backoffOrYield(curMaxDelay);
-    }
+    if (file1Done && !chunk1 && file2Done && !chunk2 && file3Done && !chunk3)
+      break;
   }
 
   // Flush remaining
   if (numWaiting > 0) {
     local->have(numWaiting);
-    local->set_chunk_frag_offset(file_idx, first_frag_of_chunk);
+    local->set_chunk_frag_offset(file_idx, gathered_count - numWaiting);
     curMaxDelay = MIN_BACKOFF_ITERS;
     while (!readQueue.try_enqueue(*pRead, std::move(local))) {
       fastx_parser::thread_utils::backoffOrYield(curMaxDelay);
     }
   } else {
-    seqContainerQueue.enqueue(std::move(local));
+    // Return unused chunk (ignoring)
   }
 
   --numAssembling;
@@ -698,13 +724,6 @@ template <> bool FastxParser<ReadPair>::start() {
 
     if (parallelParsing_) {
       // Parallel mode: spawn separate threads for each file + assembler
-      // For each file pair, we need:
-      // - 2 parser threads (one per file)
-      // - 1 assembler thread
-      // We use numParsers_ to determine how many file pairs to process in
-      // parallel
-
-      // We'll process all file pairs, spawning threads for each
       size_t numFilePairs = inputStreams_.size();
       threadResults_.resize(numFilePairs *
                             3); // 2 parsers + 1 assembler per pair
@@ -712,29 +731,32 @@ template <> bool FastxParser<ReadPair>::start() {
 
       for (size_t fn = 0; fn < numFilePairs; ++fn) {
         // Create intermediate queues for this file pair
-        auto queue1 = std::make_shared<
-            moodycamel::ConcurrentQueue<ParsedSingleRead<klibpp::KSeq>>>(4096);
-        auto queue2 = std::make_shared<
-            moodycamel::ConcurrentQueue<ParsedSingleRead<klibpp::KSeq>>>(4096);
+        auto queue1 = std::make_shared<moodycamel::ConcurrentQueue<
+            std::unique_ptr<ReadChunk<klibpp::KSeq>>>>(128);
+        auto queue2 = std::make_shared<moodycamel::ConcurrentQueue<
+            std::unique_ptr<ReadChunk<klibpp::KSeq>>>>(128);
         auto done1 = std::make_shared<std::atomic<bool>>(false);
         auto done2 = std::make_shared<std::atomic<bool>>(false);
         auto numAssembling = std::make_shared<std::atomic<uint32_t>>(1);
 
         // Parser thread for file1
         ++numParsing_;
-        parsingThreads_.emplace_back(new std::thread([this, fn, queue1,
-                                                      done1]() {
-          this->threadResults_[fn * 3] = parse_single_file<klibpp::KSeq>(
-              this->inputStreams_[fn], fn, this->numParsing_, *done1, *queue1);
-        }));
+        parsingThreads_.emplace_back(
+            new std::thread([this, fn, queue1, done1]() {
+              this->threadResults_[fn * 3] = parse_single_file<klibpp::KSeq>(
+                  this->inputStreams_[fn], fn, this->numParsing_, *done1,
+                  *queue1, this->blockSize_);
+            }));
 
         // Parser thread for file2
         ++numParsing_;
-        parsingThreads_.emplace_back(new std::thread([this, fn, queue2,
-                                                      done2]() {
-          this->threadResults_[fn * 3 + 1] = parse_single_file<klibpp::KSeq>(
-              this->inputStreams2_[fn], fn, this->numParsing_, *done2, *queue2);
-        }));
+        parsingThreads_.emplace_back(
+            new std::thread([this, fn, queue2, done2]() {
+              this->threadResults_[fn * 3 + 1] =
+                  parse_single_file<klibpp::KSeq>(this->inputStreams2_[fn], fn,
+                                                  this->numParsing_, *done2,
+                                                  *queue2, this->blockSize_);
+            }));
 
         // Assembler thread
         ++numParsing_;
@@ -793,27 +815,30 @@ template <> bool FastxParser<ReadQualPair>::start() {
       std::fill(threadResults_.begin(), threadResults_.end(), 0);
 
       for (size_t fn = 0; fn < numFilePairs; ++fn) {
-        auto queue1 = std::make_shared<
-            moodycamel::ConcurrentQueue<ParsedSingleRead<klibpp::KSeq>>>(4096);
-        auto queue2 = std::make_shared<
-            moodycamel::ConcurrentQueue<ParsedSingleRead<klibpp::KSeq>>>(4096);
+        auto queue1 = std::make_shared<moodycamel::ConcurrentQueue<
+            std::unique_ptr<ReadChunk<klibpp::KSeq>>>>(128);
+        auto queue2 = std::make_shared<moodycamel::ConcurrentQueue<
+            std::unique_ptr<ReadChunk<klibpp::KSeq>>>>(128);
         auto done1 = std::make_shared<std::atomic<bool>>(false);
         auto done2 = std::make_shared<std::atomic<bool>>(false);
         auto numAssembling = std::make_shared<std::atomic<uint32_t>>(1);
 
         ++numParsing_;
-        parsingThreads_.emplace_back(new std::thread([this, fn, queue1,
-                                                      done1]() {
-          this->threadResults_[fn * 3] = parse_single_file<klibpp::KSeq>(
-              this->inputStreams_[fn], fn, this->numParsing_, *done1, *queue1);
-        }));
+        parsingThreads_.emplace_back(
+            new std::thread([this, fn, queue1, done1]() {
+              this->threadResults_[fn * 3] = parse_single_file<klibpp::KSeq>(
+                  this->inputStreams_[fn], fn, this->numParsing_, *done1,
+                  *queue1, this->blockSize_);
+            }));
 
         ++numParsing_;
-        parsingThreads_.emplace_back(new std::thread([this, fn, queue2,
-                                                      done2]() {
-          this->threadResults_[fn * 3 + 1] = parse_single_file<klibpp::KSeq>(
-              this->inputStreams2_[fn], fn, this->numParsing_, *done2, *queue2);
-        }));
+        parsingThreads_.emplace_back(
+            new std::thread([this, fn, queue2, done2]() {
+              this->threadResults_[fn * 3 + 1] =
+                  parse_single_file<klibpp::KSeq>(this->inputStreams2_[fn], fn,
+                                                  this->numParsing_, *done2,
+                                                  *queue2, this->blockSize_);
+            }));
 
         ++numParsing_;
         size_t tokenIdx = fn % numParsers_;
@@ -864,37 +889,42 @@ template <> bool FastxParser<ReadTriple>::start() {
       std::fill(threadResults_.begin(), threadResults_.end(), 0);
 
       for (size_t fn = 0; fn < numFileTriplets; ++fn) {
-        auto queue1 = std::make_shared<
-            moodycamel::ConcurrentQueue<ParsedSingleRead<klibpp::KSeq>>>(4096);
-        auto queue2 = std::make_shared<
-            moodycamel::ConcurrentQueue<ParsedSingleRead<klibpp::KSeq>>>(4096);
-        auto queue3 = std::make_shared<
-            moodycamel::ConcurrentQueue<ParsedSingleRead<klibpp::KSeq>>>(4096);
+        auto queue1 = std::make_shared<moodycamel::ConcurrentQueue<
+            std::unique_ptr<ReadChunk<klibpp::KSeq>>>>(128);
+        auto queue2 = std::make_shared<moodycamel::ConcurrentQueue<
+            std::unique_ptr<ReadChunk<klibpp::KSeq>>>>(128);
+        auto queue3 = std::make_shared<moodycamel::ConcurrentQueue<
+            std::unique_ptr<ReadChunk<klibpp::KSeq>>>>(128);
         auto done1 = std::make_shared<std::atomic<bool>>(false);
         auto done2 = std::make_shared<std::atomic<bool>>(false);
         auto done3 = std::make_shared<std::atomic<bool>>(false);
         auto numAssembling = std::make_shared<std::atomic<uint32_t>>(1);
 
         ++numParsing_;
-        parsingThreads_.emplace_back(new std::thread([this, fn, queue1,
-                                                      done1]() {
-          this->threadResults_[fn * 4] = parse_single_file<klibpp::KSeq>(
-              this->inputStreams_[fn], fn, this->numParsing_, *done1, *queue1);
-        }));
+        parsingThreads_.emplace_back(
+            new std::thread([this, fn, queue1, done1]() {
+              this->threadResults_[fn * 4] = parse_single_file<klibpp::KSeq>(
+                  this->inputStreams_[fn], fn, this->numParsing_, *done1,
+                  *queue1, this->blockSize_);
+            }));
 
         ++numParsing_;
-        parsingThreads_.emplace_back(new std::thread([this, fn, queue2,
-                                                      done2]() {
-          this->threadResults_[fn * 4 + 1] = parse_single_file<klibpp::KSeq>(
-              this->inputStreams2_[fn], fn, this->numParsing_, *done2, *queue2);
-        }));
+        parsingThreads_.emplace_back(
+            new std::thread([this, fn, queue2, done2]() {
+              this->threadResults_[fn * 4 + 1] =
+                  parse_single_file<klibpp::KSeq>(this->inputStreams2_[fn], fn,
+                                                  this->numParsing_, *done2,
+                                                  *queue2, this->blockSize_);
+            }));
 
         ++numParsing_;
-        parsingThreads_.emplace_back(new std::thread([this, fn, queue3,
-                                                      done3]() {
-          this->threadResults_[fn * 4 + 2] = parse_single_file<klibpp::KSeq>(
-              this->inputStreams3_[fn], fn, this->numParsing_, *done3, *queue3);
-        }));
+        parsingThreads_.emplace_back(
+            new std::thread([this, fn, queue3, done3]() {
+              this->threadResults_[fn * 4 + 2] =
+                  parse_single_file<klibpp::KSeq>(this->inputStreams3_[fn], fn,
+                                                  this->numParsing_, *done3,
+                                                  *queue3, this->blockSize_);
+            }));
 
         ++numParsing_;
         size_t tokenIdx = fn % numParsers_;
@@ -934,37 +964,42 @@ template <> bool FastxParser<ReadQualTriple>::start() {
       std::fill(threadResults_.begin(), threadResults_.end(), 0);
 
       for (size_t fn = 0; fn < numFileTriplets; ++fn) {
-        auto queue1 = std::make_shared<
-            moodycamel::ConcurrentQueue<ParsedSingleRead<klibpp::KSeq>>>(4096);
-        auto queue2 = std::make_shared<
-            moodycamel::ConcurrentQueue<ParsedSingleRead<klibpp::KSeq>>>(4096);
-        auto queue3 = std::make_shared<
-            moodycamel::ConcurrentQueue<ParsedSingleRead<klibpp::KSeq>>>(4096);
+        auto queue1 = std::make_shared<moodycamel::ConcurrentQueue<
+            std::unique_ptr<ReadChunk<klibpp::KSeq>>>>(128);
+        auto queue2 = std::make_shared<moodycamel::ConcurrentQueue<
+            std::unique_ptr<ReadChunk<klibpp::KSeq>>>>(128);
+        auto queue3 = std::make_shared<moodycamel::ConcurrentQueue<
+            std::unique_ptr<ReadChunk<klibpp::KSeq>>>>(128);
         auto done1 = std::make_shared<std::atomic<bool>>(false);
         auto done2 = std::make_shared<std::atomic<bool>>(false);
         auto done3 = std::make_shared<std::atomic<bool>>(false);
         auto numAssembling = std::make_shared<std::atomic<uint32_t>>(1);
 
         ++numParsing_;
-        parsingThreads_.emplace_back(new std::thread([this, fn, queue1,
-                                                      done1]() {
-          this->threadResults_[fn * 4] = parse_single_file<klibpp::KSeq>(
-              this->inputStreams_[fn], fn, this->numParsing_, *done1, *queue1);
-        }));
+        parsingThreads_.emplace_back(
+            new std::thread([this, fn, queue1, done1]() {
+              this->threadResults_[fn * 4] = parse_single_file<klibpp::KSeq>(
+                  this->inputStreams_[fn], fn, this->numParsing_, *done1,
+                  *queue1, this->blockSize_);
+            }));
 
         ++numParsing_;
-        parsingThreads_.emplace_back(new std::thread([this, fn, queue2,
-                                                      done2]() {
-          this->threadResults_[fn * 4 + 1] = parse_single_file<klibpp::KSeq>(
-              this->inputStreams2_[fn], fn, this->numParsing_, *done2, *queue2);
-        }));
+        parsingThreads_.emplace_back(
+            new std::thread([this, fn, queue2, done2]() {
+              this->threadResults_[fn * 4 + 1] =
+                  parse_single_file<klibpp::KSeq>(this->inputStreams2_[fn], fn,
+                                                  this->numParsing_, *done2,
+                                                  *queue2, this->blockSize_);
+            }));
 
         ++numParsing_;
-        parsingThreads_.emplace_back(new std::thread([this, fn, queue3,
-                                                      done3]() {
-          this->threadResults_[fn * 4 + 2] = parse_single_file<klibpp::KSeq>(
-              this->inputStreams3_[fn], fn, this->numParsing_, *done3, *queue3);
-        }));
+        parsingThreads_.emplace_back(
+            new std::thread([this, fn, queue3, done3]() {
+              this->threadResults_[fn * 4 + 2] =
+                  parse_single_file<klibpp::KSeq>(this->inputStreams3_[fn], fn,
+                                                  this->numParsing_, *done3,
+                                                  *queue3, this->blockSize_);
+            }));
 
         ++numParsing_;
         size_t tokenIdx = fn % numParsers_;

@@ -90,13 +90,8 @@ struct ReadQualTriple {
   klibpp::KSeq third;
 };
 
-// Intermediate structure for parallel parsing - holds a single read with its rank
-template <typename T> struct ParsedSingleRead {
-  T read;
-  uint64_t rank;      // position in original file (for synchronization)
-  uint32_t file_idx;  // which file-set this belongs to
-  bool is_end{false}; // signals end of file
-};
+// Intermediate structure for parallel parsing - no longer needed with
+// chunk-based queues template <typename T> struct ParsedSingleRead { ... }
 
 struct ChunkFragOffset {
   uint32_t file_idx{0};
@@ -118,9 +113,7 @@ public:
     frag_offset_.frag_idx = frag_num;
   }
 
-  ChunkFragOffset chunk_frag_offset() const { 
-    return frag_offset_;
-  }
+  ChunkFragOffset chunk_frag_offset() const { return frag_offset_; }
 
 private:
   std::vector<T> group_;
@@ -149,7 +142,7 @@ public:
   }
   void setChunkEmpty() { chunk_.release(); }
   bool empty() const { return chunk_.get() == nullptr; }
-  ChunkFragOffset chunk_frag_offset() const { 
+  ChunkFragOffset chunk_frag_offset() const {
     return chunk_->chunk_frag_offset();
   }
 
@@ -186,10 +179,10 @@ private:
 
   std::vector<std::string> inputStreams_;
   std::vector<std::string> inputStreams2_;
-  std::vector<std::string> inputStreams3_;  // For triplet files
+  std::vector<std::string> inputStreams3_; // For triplet files
   uint32_t numParsers_;
   std::atomic<uint32_t> numParsing_;
-  bool parallelParsing_{true};  // Enable parallel parsing for multi-file modes
+  bool parallelParsing_{true}; // Enable parallel parsing for multi-file modes
 
   // NOTE: Would like to use std::future<int> here instead, but that
   // solution doesn't seem to work.  It's unclear exactly why
@@ -212,5 +205,5 @@ private:
   std::vector<std::unique_ptr<moodycamel::ConsumerToken>> consumeContainers_;
   bool isActive_{false};
 };
-}
+} // namespace fastx_parser
 #endif // __FASTX_PARSER__
