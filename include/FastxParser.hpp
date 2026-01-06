@@ -11,6 +11,8 @@
 #include <vector>
 
 #include "kseq++.hpp"
+#include <array>
+#include <tuple>
 
 #include "concurrentqueue.h"
 
@@ -90,6 +92,62 @@ struct ReadQualTriple {
   klibpp::KSeq third;
 };
 
+// Generic trait
+template <typename T> struct ReadTrait {
+  static constexpr size_t arity = std::tuple_size<T>::value;
+  static klibpp::KSeq& get(T& t, size_t i) { return t[i]; }
+};
+
+// Specialization for ReadPair
+template <> struct ReadTrait<ReadPair> {
+  static constexpr size_t arity = 2;
+  static klibpp::KSeq& get(ReadPair& t, size_t i) {
+    return (i == 0) ? t.first : t.second;
+  }
+};
+
+// Specialization for ReadQualPair
+template <> struct ReadTrait<ReadQualPair> {
+  static constexpr size_t arity = 2;
+  static klibpp::KSeq& get(ReadQualPair& t, size_t i) {
+    return (i == 0) ? t.first : t.second;
+  }
+};
+
+// Specialization for ReadTriple
+template <> struct ReadTrait<ReadTriple> {
+  static constexpr size_t arity = 3;
+  static klibpp::KSeq& get(ReadTriple& t, size_t i) {
+    if (i == 0)
+      return t.first;
+    if (i == 1)
+      return t.second;
+    return t.third;
+  }
+};
+
+// Specialization for ReadQualTriple
+template <> struct ReadTrait<ReadQualTriple> {
+  static constexpr size_t arity = 3;
+  static klibpp::KSeq& get(ReadQualTriple& t, size_t i) {
+    if (i == 0)
+      return t.first;
+    if (i == 1)
+      return t.second;
+    return t.third;
+  }
+};
+
+// Specialization for KSeq (single read)
+template <> struct ReadTrait<klibpp::KSeq> {
+  static constexpr size_t arity = 1;
+  static klibpp::KSeq& get(klibpp::KSeq& t, size_t i) { return t; }
+};
+
+struct FileGroup {
+  std::vector<std::string> files;
+};
+
 // Intermediate structure for parallel parsing - no longer needed with
 // chunk-based queues template <typename T> struct ParsedSingleRead { ... }
 
@@ -166,6 +224,11 @@ public:
               std::vector<std::string> files3, uint32_t numConsumers,
               uint32_t numParsers = 1, uint32_t chunkSize = 1000,
               bool parallelParsing = true);
+
+  // Generic constructor
+  template <typename... FileGroups>
+  FastxParser(uint32_t numConsumers, uint32_t numParsers, uint32_t chunkSize,
+              bool parallelParsing, FileGroups... fileGroups);
   ~FastxParser();
   bool start();
   bool stop();
@@ -177,9 +240,7 @@ private:
   moodycamel::ProducerToken getProducerToken_();
   moodycamel::ConsumerToken getConsumerToken_();
 
-  std::vector<std::string> inputStreams_;
-  std::vector<std::string> inputStreams2_;
-  std::vector<std::string> inputStreams3_; // For triplet files
+  std::array<FileGroup, ReadTrait<T>::arity> inputStreams_;
   uint32_t numParsers_;
   std::atomic<uint32_t> numParsing_;
   bool parallelParsing_{true}; // Enable parallel parsing for multi-file modes
