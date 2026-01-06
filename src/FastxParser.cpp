@@ -150,7 +150,6 @@ int parse_single_file(
   }
 
   auto seq = make_kstream(fp, gzread, mode::in);
-  SingleReadT record;
   uint32_t recordsInChunk = 0;
 
   // Helper to allocate or recycle a chunk
@@ -166,8 +165,7 @@ int parse_single_file(
   // Allocate initial chunk
   auto currentChunk = get_chunk(chunkSize);
 
-  while (seq >> record) {
-    (*currentChunk)[recordsInChunk] = std::move(record);
+  while (seq >> (*currentChunk)[recordsInChunk]) {
     recordsInChunk++;
 
     if (recordsInChunk == chunkSize) {
