@@ -34,6 +34,36 @@ struct ParserConfig {
   }
 };
 
+class ParserConfigBuilder {
+public :
+
+  ParserConfigBuilder() = default;
+
+  ParserConfigBuilder& with_consumers(uint32_t numConsumers) {
+    c_.numConsumers = numConsumers;
+    return *this;
+  }
+
+  ParserConfigBuilder& with_parsers(uint32_t numParsers) {
+    c_.numParsers = numParsers;
+    return *this;
+  }
+
+  ParserConfigBuilder& within_set_parallelism(bool parallelParsing) {
+    c_.parallelParsing = parallelParsing;
+    return *this;
+  }
+
+  ParserConfigBuilder& with_chunk_size(uint32_t chunkSize) {
+    c_.chunkSize = chunkSize;
+    return *this;
+  }
+
+  ParserConfig build() { return c_; }
+private:
+  ParserConfig c_;
+};
+
 
 // holds a "set" of files that correspond to components (in different files)
 // of the same fragment. For single-end reads, this is just a file, for 
@@ -55,6 +85,7 @@ struct FileGroup {
   size_t arity{0};
 };
 
+// forward declaration of hte read trait
 template <typename T> 
 struct ReadTrait;
 
@@ -141,9 +172,6 @@ using ReadQualQuad = ReadQualSet<4>;
 
 using ReadQualPair = ReadQualSet<2>;
 using ReadQualTriple = ReadQualSet<3>;
-
-// Intermediate structure for parallel parsing - no longer needed with
-// chunk-based queues template <typename T> struct ParsedSingleRead { ... }
 
 struct ChunkFragOffset {
   uint32_t file_idx{0};

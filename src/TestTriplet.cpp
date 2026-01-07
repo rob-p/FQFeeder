@@ -55,8 +55,10 @@ int main(int argc, char* argv[]) {
 
   size_t nt = 4;
   size_t np = 1;
-  fastx_parser::FastxParser<fastx_parser::ReadTriple> parser(files1, files2,
-                                                             files3, nt, np);
+
+  auto pc = fastx_parser::ParserConfigBuilder().within_set_parallelism(true).with_consumers(nt).build();
+
+  fastx_parser::FastxParser<fastx_parser::ReadTriple> parser(pc, files1, files2, files3);
   parser.start();
 
   std::vector<std::thread> readers;

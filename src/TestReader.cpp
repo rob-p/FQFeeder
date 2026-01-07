@@ -57,8 +57,7 @@ int main(int argc, char* argv[]) {
   size_t nt = 4;
   size_t np = 2;
 
-  fastx_parser::ParserConfig pc = fastx_parser::ParserConfig::with_consumers_multi(nt);
-  pc.numParsers = np;
+  auto pc = fastx_parser::ParserConfigBuilder().within_set_parallelism(true).with_consumers(nt).build();
 
   fastx_parser::FastxParser<fastx_parser::ReadPair> parser(pc, files, files2);
   parser.start();
