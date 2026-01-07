@@ -317,7 +317,11 @@ int assemble_read_pairs(
       fastx_parser::thread_utils::backoffOrYield(kBackoff);
     }
   } else {
-    // Return unused chunk (ignoring for now as discussed to simplify logic)
+    // Return unused chunk to the container queue
+    size_t kBackoff = MIN_BACKOFF_ITERS;
+    while (!seqContainerQueue.try_enqueue(std::move(local))) {
+      fastx_parser::thread_utils::backoffOrYield(kBackoff);
+    }
   }
 
   --numAssembling;
@@ -439,7 +443,11 @@ int assemble_read_triplets(
       fastx_parser::thread_utils::backoffOrYield(curMaxDelay);
     }
   } else {
-    // Return unused chunk (ignoring)
+    // Return unused chunk to the container queue
+    curMaxDelay = MIN_BACKOFF_ITERS;
+    while (!seqContainerQueue.try_enqueue(std::move(local))) {
+      fastx_parser::thread_utils::backoffOrYield(curMaxDelay);
+    }
   }
 
   --numAssembling;

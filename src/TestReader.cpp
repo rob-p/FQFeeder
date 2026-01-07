@@ -56,7 +56,8 @@ int main(int argc, char* argv[]) {
 
   size_t nt = 4;
   size_t np = 2;
-  fastx_parser::FastxParser<fastx_parser::ReadPair> parser(files, files2, nt, np);
+  // without parallel parsing
+  fastx_parser::FastxParser<fastx_parser::ReadPair> parser(files, files2, nt, np, 1000, true);
   parser.start();
 
   std::vector<std::thread> readers;
