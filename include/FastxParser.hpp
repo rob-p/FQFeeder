@@ -9,7 +9,7 @@
 #include <iostream>
 #include <thread>
 #include <vector>
-
+#include <utility>
 #include "kseq++.hpp"
 
 #include "concurrentqueue.h"
@@ -17,46 +17,31 @@
 #ifndef __FASTX_PARSER_PRECXX14_MAKE_UNIQUE__
 #define __FASTX_PARSER_PRECXX14_MAKE_UNIQUE__
 
-#if __cplusplus >= 201402L
 #include <memory>
 using std::make_unique;
-#else
-
-#include <cstddef>
-#include <memory>
-#include <type_traits>
-#include <utility>
-
-template <class T> struct _Unique_if {
-  using _Single_object = std::unique_ptr<T>;
-};
-
-template <class T> struct _Unique_if<T[]> {
-  using _Unknown_bound = std::unique_ptr<T[]>;
-};
-
-template <class T, size_t N> struct _Unique_if<T[N]> {
-  using _Known_bound = void;
-};
-
-template <class T, class... Args>
-typename _Unique_if<T>::_Single_object make_unique(Args&&... args) {
-  return std::unique_ptr<T>(new T(std::forward<Args>(args)...));
-}
-
-template <class T>
-typename _Unique_if<T>::_Unknown_bound make_unique(size_t n) {
-  using U = typename std::remove_extent<T>::type;
-  return std::unique_ptr<T>(new U[n]());
-}
-
-template <class T, class... Args>
-typename _Unique_if<T>::_Known_bound make_unique(Args&&...) = delete;
-
-#endif // C++11
-#endif //__FASTX_PARSER_PRECXX14_MAKE_UNIQUE__
 
 namespace fastx_parser {
+
+// holds a "set" of files that correspond to components (in different files)
+// of the same fragment. For single-end reads, this is just a file, for 
+// paired-end reads, it is a pair of files, etc.
+struct FileGroup {
+  template<typename... Strings>
+  explicit ReadSet(Strings&&... strs)
+    : file_names{std::forward<Strings>(strs)...}
+    , arity(sizeof...(strs))
+  {}
+
+  template<typename Iterator>
+  ReadSet(Iterator first, Iterator last)
+    : file_names(first, last)
+    , arity(file_names.size())
+  {}
+
+  size_t arity{0};
+  std::vector<std::string> file_names;
+};
+
 
 using ReadSeq = klibpp::KSeq;
 using ReadQual = klibpp::KSeq;
