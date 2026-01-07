@@ -478,8 +478,7 @@ int parse_read_pairs(
 // Template member function implementation for parallel parsing
 template <typename T>
 template <size_t N>
-bool FastxParser<T>::start_parallel_parsing_impl(
-    std::array<std::vector<std::string>*, N> inputStreamArrays) {
+bool FastxParser<T>::start_parallel_parsing_impl() {
   
   if (numParsing_ != 0) {
     return false;
@@ -487,25 +486,22 @@ bool FastxParser<T>::start_parallel_parsing_impl(
 
   isActive_ = true;
 
-  // Validate all file vectors have matching sizes
-  size_t numFiles = inputStreamArrays[0]->size();
-  for (size_t i = 1; i < N; ++i) {
-    if (inputStreamArrays[i]->size() != numFiles) {
-      throw std::invalid_argument(
-          "All file vectors must have the same number of files");
-    }
+  // Validate using inputStreamSets_ directly
+  size_t numFiles = inputStreamSets_[0].size();
+  
+  // Static assert to ensure we have the right arity
+  static_assert(N == ReadTrait<T>::arity, 
+                "Template parameter N must match read type arity");
+  
+  if (inputStreamSets_.size() != N) {
+    throw std::logic_error("inputStreamSets_ size doesn't match template arity");
   }
 
-  // Check for duplicate files
-  for (size_t fileIdx = 0; fileIdx < numFiles; ++fileIdx) {
-    for (size_t i = 0; i < N; ++i) {
-      for (size_t j = i + 1; j < N; ++j) {
-        if ((*inputStreamArrays[i])[fileIdx] == (*inputStreamArrays[j])[fileIdx]) {
-          throw std::invalid_argument(
-              "Same file provided for multiple reads: " + 
-              (*inputStreamArrays[i])[fileIdx]);
-        }
-      }
+  // Validate all file vectors have matching sizes
+  for (size_t i = 1; i < N; ++i) {
+    if (inputStreamSets_[i].size() != numFiles) {
+      throw std::invalid_argument(
+          "All file vectors must have the same number of files");
     }
   }
 
@@ -543,7 +539,7 @@ bool FastxParser<T>::start_parallel_parsing_impl(
     // Launch N parser threads
     for (size_t i = 0; i < N; ++i) {
       ++numParsing_;
-      const std::string& filename = (*inputStreamArrays[i])[fn];
+      const std::string& filename = inputStreamSets_[i][fn];
       //std::cerr << "Launching parser thread for file " << fn << ", stream " << i << ": " << filename << "\n";
       parsingThreads_.emplace_back(
           new std::thread([this, fn, i, queue = (*queues)[i], 
@@ -598,7 +594,7 @@ template <> bool FastxParser<ReadSeq>::start() {
       ++numParsing_;
       parsingThreads_.emplace_back(new std::thread([this, i]() {
         this->threadResults_[i] = parse_reads(
-            this->inputStreams_, this->numParsing_,
+            this->inputStreamSets_[0], this->numParsing_,
             this->consumeContainers_[i].get(), this->produceReads_[i].get(),
             this->workQueue_, this->seqContainerQueue_, this->readQueue_);
       }));
@@ -611,11 +607,8 @@ template <> bool FastxParser<ReadSeq>::start() {
 
 
 template <> bool FastxParser<ReadPair>::start() {
-  if (parallelParsing_ && !inputStreams2_.empty()) {
-    std::array<std::vector<std::string>*, 2> streams = {
-        &inputStreams_, &inputStreams2_
-    };
-    return start_parallel_parsing_impl<2>(streams);
+  if (parallelParsing_ && inputStreamSets_.size() > 0) {
+    return start_parallel_parsing_impl<2>();
   } else {
     // Fall back to sequential parsing
     if (numParsing_ == 0) {
@@ -632,7 +625,7 @@ template <> bool FastxParser<ReadPair>::start() {
         ++numParsing_;
         parsingThreads_.emplace_back(new std::thread([this, i]() {
           this->threadResults_[i] = parse_read_pairs(
-              this->inputStreams_, this->inputStreams2_, this->numParsing_,
+              this->inputStreamSets_[0], this->inputStreamSets_[0], this->numParsing_,
               this->consumeContainers_[i].get(), this->produceReads_[i].get(),
               this->workQueue_, this->seqContainerQueue_, this->readQueue_);
         }));
@@ -644,11 +637,8 @@ template <> bool FastxParser<ReadPair>::start() {
 }
 
 template <> bool FastxParser<ReadQualPair>::start() {
-  if (parallelParsing_ && !inputStreams2_.empty()) {
-    std::array<std::vector<std::string>*, 2> streams = {
-        &inputStreams_, &inputStreams2_
-    };
-    return start_parallel_parsing_impl<2>(streams);
+  if (parallelParsing_ && inputStreamSets_.size() > 0) {
+    return start_parallel_parsing_impl<2>();
   } else {
     // Fall back to sequential
     if (numParsing_ == 0) {
@@ -660,7 +650,7 @@ template <> bool FastxParser<ReadQualPair>::start() {
         ++numParsing_;
         parsingThreads_.emplace_back(new std::thread([this, i]() {
           this->threadResults_[i] = parse_read_pairs(
-              this->inputStreams_, this->inputStreams2_, this->numParsing_,
+              this->inputStreamSets_[0], this->inputStreamSets_[1], this->numParsing_,
               this->consumeContainers_[i].get(), this->produceReads_[i].get(),
               this->workQueue_, this->seqContainerQueue_, this->readQueue_);
         }));
@@ -672,17 +662,11 @@ template <> bool FastxParser<ReadQualPair>::start() {
 }
 
 template <> bool FastxParser<ReadTriple>::start() {
-  std::array<std::vector<std::string>*, 3> streams = {
-      &inputStreams_, &inputStreams2_, &inputStreams3_
-  };
-  return start_parallel_parsing_impl<3>(streams);
+  return start_parallel_parsing_impl<3>();
 }
 
 template <> bool FastxParser<ReadQualTriple>::start() {
-  std::array<std::vector<std::string>*, 3> streams = {
-      &inputStreams_, &inputStreams2_, &inputStreams3_
-  };
-  return start_parallel_parsing_impl<3>(streams);
+  return start_parallel_parsing_impl<3>();
 }
 
 template <typename T> bool FastxParser<T>::refill(ReadGroup<T>& seqs) {

@@ -18,6 +18,23 @@ using std::make_unique;
 
 namespace fastx_parser {
 
+// configuration for a FastxParser
+struct ParserConfig {
+  uint32_t numConsumers{1};
+  uint32_t numParsers{1};
+  uint32_t chunkSize{1000};
+  bool parallelParsing{true};
+  
+  static ParserConfig with_consumers_single(uint32_t numConsumers) {
+    return {numConsumers, 1, 1000, false};
+  }
+
+  static ParserConfig with_consumers_multi(uint32_t numConsumers) {
+    return {numConsumers, 1, 1000, true};
+  }
+};
+
+
 // holds a "set" of files that correspond to components (in different files)
 // of the same fragment. For single-end reads, this is just a file, for 
 // paired-end reads, it is a pair of files, etc.
@@ -201,6 +218,84 @@ public:
               std::vector<std::string> files3, uint32_t numConsumers,
               uint32_t numParsers = 1, uint32_t chunkSize = 1000,
               bool parallelParsing = true);
+
+  template <typename... FileVectors>
+  FastxParser(
+    fastx_parser::ParserConfig& c,
+    FileVectors&&... fileVectors)
+    : inputStreamSets_{std::forward<FileVectors>(fileVectors)...},
+    numParsing_(0),
+    parallelParsing_(c.parallelParsing),
+    blockSize_(c.chunkSize) {
+
+    constexpr size_t arity = sizeof...(fileVectors);
+
+    // Static assert to ensure arity matches T
+    static_assert(arity == ReadTrait<T>::arity, 
+    "Number of file vectors must match read type arity");
+
+    // Validate that all vectors have the same size
+    if (inputStreamSets_.empty()) {
+      throw std::invalid_argument("Must provide at least one file vector");
+    }
+
+    size_t numFiles = inputStreamSets_[0].size();
+    for (size_t i = 1; i < arity; ++i) {
+      if (inputStreamSets_[i].size() != numFiles) {
+        throw std::invalid_argument(
+          "All file vectors must have the same number of files");
+      }
+    }
+
+    // Validate no duplicate files across the same file set
+    for (size_t fileIdx = 0; fileIdx < numFiles; ++fileIdx) {
+      for (size_t i = 0; i < arity; ++i) {
+        for (size_t j = i + 1; j < arity; ++j) {
+          if (inputStreamSets_[i][fileIdx] == inputStreamSets_[j][fileIdx]) {
+            std::cerr << "[WARNING]: Same file provided for multiple reads: " << inputStreamSets_[i][fileIdx] << "\n";
+          }
+        }
+      }
+    }
+
+    // Adjust numParsers if needed
+    if (c.numParsers > numFiles) {
+      std::cerr << "[INFO]: Can't make use of more parsing threads than file sets; "
+        "setting # of parsing threads to " << numFiles << '\n';
+      c.numParsers = numFiles;
+    }
+    numParsers_ = c.numParsers;
+    numParsing_ = 0;
+
+    // Initialize concurrent queues
+    readQueue_ = moodycamel::ConcurrentQueue<std::unique_ptr<ReadChunk<T>>>(
+      4 * c.numConsumers, c.numParsers, 0);
+
+    seqContainerQueue_ =
+      moodycamel::ConcurrentQueue<std::unique_ptr<ReadChunk<T>>>(
+        4 * c.numConsumers, 1 + c.numConsumers, 0);
+
+    workQueue_ = moodycamel::ConcurrentQueue<uint32_t>(numParsers_);
+
+    // Push all file indices onto the work queue
+    for (size_t i = 0; i < numFiles; ++i) {
+      workQueue_.enqueue(i);
+    }
+
+    // Create tokens for each parsing thread
+    for (size_t i = 0; i < numParsers_; ++i) {
+      consumeContainers_.emplace_back(
+        new moodycamel::ConsumerToken(seqContainerQueue_));
+      produceReads_.emplace_back(new moodycamel::ProducerToken(readQueue_));
+    }
+
+    // Pre-allocate read chunks
+    moodycamel::ProducerToken produceContainer(seqContainerQueue_);
+    for (size_t i = 0; i < 4 * c.numConsumers; ++i) {
+      auto chunk = make_unique<ReadChunk<T>>(blockSize_);
+      seqContainerQueue_.enqueue(produceContainer, std::move(chunk));
+    }
+  }
   ~FastxParser();
   bool start();
   bool stop();
@@ -215,6 +310,8 @@ private:
   std::vector<std::string> inputStreams_;
   std::vector<std::string> inputStreams2_;
   std::vector<std::string> inputStreams3_; // For triplet files
+  std::vector<std::vector<std::string>> inputStreamSets_;
+
   uint32_t numParsers_;
   std::atomic<uint32_t> numParsing_;
   bool parallelParsing_{true}; // Enable parallel parsing for multi-file modes
@@ -242,7 +339,7 @@ private:
 
   // Helper for parallel parsing of N-way read sets
   template <size_t N>
-  bool start_parallel_parsing_impl(std::array<std::vector<std::string>*, N> inputStreamArrays);
+  bool start_parallel_parsing_impl();
 };
 } // namespace fastx_parser
 
