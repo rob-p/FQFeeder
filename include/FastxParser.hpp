@@ -10,14 +10,10 @@
 #include <thread>
 #include <vector>
 #include <utility>
+#include <memory>
 #include "kseq++.hpp"
-
 #include "concurrentqueue.h"
 
-#ifndef __FASTX_PARSER_PRECXX14_MAKE_UNIQUE__
-#define __FASTX_PARSER_PRECXX14_MAKE_UNIQUE__
-
-#include <memory>
 using std::make_unique;
 
 namespace fastx_parser {
@@ -27,53 +23,105 @@ namespace fastx_parser {
 // paired-end reads, it is a pair of files, etc.
 struct FileGroup {
   template<typename... Strings>
-  explicit ReadSet(Strings&&... strs)
+  explicit FileGroup(Strings&&... strs)
     : file_names{std::forward<Strings>(strs)...}
     , arity(sizeof...(strs))
   {}
 
   template<typename Iterator>
-  ReadSet(Iterator first, Iterator last)
+  FileGroup(Iterator first, Iterator last)
     : file_names(first, last)
     , arity(file_names.size())
   {}
 
-  size_t arity{0};
   std::vector<std::string> file_names;
+  size_t arity{0};
 };
 
+template <typename T> 
+struct ReadTrait;
 
+// Generic ReadSet that works for any arity
+template <size_t N>
+struct ReadSet {
+    std::array<klibpp::KSeq, N> reads;
+    
+    // Array-like access
+    klibpp::KSeq& operator[](size_t i) { return reads[i]; }
+    const klibpp::KSeq& operator[](size_t i) const { return reads[i]; }
+    
+    // Named accessors for convenience (only enabled when N is large enough)
+    template<size_t M = N, typename = std::enable_if_t<(M >= 1)>>
+    klibpp::KSeq& first() { return reads[0]; }
+    
+    template<size_t M = N, typename = std::enable_if_t<(M >= 2)>>
+    klibpp::KSeq& second() { return reads[1]; }
+    
+    template<size_t M = N, typename = std::enable_if_t<(M >= 3)>>
+    klibpp::KSeq& third() { return reads[2]; }
+    
+    template<size_t M = N, typename = std::enable_if_t<(M >= 1)>>
+    const klibpp::KSeq& first() const { return reads[0]; }
+    
+    template<size_t M = N, typename = std::enable_if_t<(M >= 2)>>
+    const klibpp::KSeq& second() const { return reads[1]; }
+    
+    template<size_t M = N, typename = std::enable_if_t<(M >= 3)>>
+    const klibpp::KSeq& third() const { return reads[2]; }
+};
+
+// Specialization of ReadTrait for ReadSet<N>
+template <size_t N>
+struct ReadTrait<ReadSet<N>> {
+    static constexpr size_t arity = N;
+    static klibpp::KSeq& get(ReadSet<N>& t, size_t i) { return t[i]; }
+};
+
+// If you want to distinguish qual vs non-qual types:
+template <size_t N>
+struct ReadQualSet {
+    std::array<klibpp::KSeq, N> reads;
+    
+    klibpp::KSeq& operator[](size_t i) { return reads[i]; }
+    const klibpp::KSeq& operator[](size_t i) const { return reads[i]; }
+    
+    template<size_t M = N, typename = std::enable_if_t<(M >= 1)>>
+    klibpp::KSeq& first() { return reads[0]; }
+    
+    template<size_t M = N, typename = std::enable_if_t<(M >= 2)>>
+    klibpp::KSeq& second() { return reads[1]; }
+    
+    template<size_t M = N, typename = std::enable_if_t<(M >= 3)>>
+    klibpp::KSeq& third() { return reads[2]; }
+};
+
+// Specialization of ReadTrait for ReadQualSet<N>
+template <size_t N>
+struct ReadTrait<ReadQualSet<N>> {
+    static constexpr size_t arity = N;
+    static klibpp::KSeq& get(ReadQualSet<N>& t, size_t i) { return t[i]; }
+};
+
+// Specialization for KSeq (single read) - keep this for backward compatibility
+template <>
+struct ReadTrait<klibpp::KSeq> {
+    static constexpr size_t arity = 1;
+    static klibpp::KSeq& get(klibpp::KSeq& t, size_t) { return t; }
+};
+
+// Type aliases for convenience and backward compatibility
 using ReadSeq = klibpp::KSeq;
-using ReadQual = klibpp::KSeq;
+using ReadPair = ReadSet<2>;
+using ReadTriple = ReadSet<3>;
+using ReadQuad = ReadSet<4>;
+using ReadQuint = ReadSet<5>;
+using ReadSextuple = ReadSet<6>;
+using ReadSeptuple = ReadSet<7>;
+using ReadOctuple = ReadSet<8>;
 
-// The ReadPair and ReadQualPair are obviously
-// redundant. But, having them as separate types
-// here would allow us to say something at compile
-// time about if we expect to be able to look
-// at qualities etc.  Think more about if we
-// really want to keep both of these.
-struct ReadPair {
-  klibpp::KSeq first;
-  klibpp::KSeq second;
-};
-
-struct ReadQualPair {
-  klibpp::KSeq first;
-  klibpp::KSeq second;
-};
-
-// Triplet types for protocols with 3 synchronized files
-struct ReadTriple {
-  klibpp::KSeq first;
-  klibpp::KSeq second;
-  klibpp::KSeq third;
-};
-
-struct ReadQualTriple {
-  klibpp::KSeq first;
-  klibpp::KSeq second;
-  klibpp::KSeq third;
-};
+using ReadQualPair = ReadQualSet<2>;
+using ReadQualTriple = ReadQualSet<3>;
+using ReadQualQuad = ReadQualSet<4>;
 
 // Intermediate structure for parallel parsing - no longer needed with
 // chunk-based queues template <typename T> struct ParsedSingleRead { ... }
@@ -191,4 +239,5 @@ private:
   bool isActive_{false};
 };
 } // namespace fastx_parser
+
 #endif // __FASTX_PARSER__

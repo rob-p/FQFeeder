@@ -3,9 +3,39 @@
 #include <thread>
 #include <vector>
 
-struct Bases {
-  uint32_t A, C, G, T;
+// Lookup table: maps ASCII char to index (0=A, 1=C, 2=G, 3=T, -1=other)
+static constexpr int8_t lookup[256] = {
+  -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
+  -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
+  -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
+  -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
+  -1, 0,-1, 1,-1,-1,-1, 2,-1,-1,-1,-1,-1,-1,-1,-1, // @ABCDEFGHIJKLMNO
+  -1,-1,-1,-1, 3,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1, // PQRSTUVWXYZ
+  -1, 0,-1, 1,-1,-1,-1, 2,-1,-1,-1,-1,-1,-1,-1,-1, // `abcdefghijklmno
+  -1,-1,-1,-1, 3,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1, // pqrstuvwxyz
+  // Rest are -1
+  -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
+  -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
+  -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
+  -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
+  -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
+  -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
+  -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
+  -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1
 };
+
+struct Bases {
+  alignas(64) uint64_t A;
+  uint64_t C;
+  uint64_t G;
+  uint64_t T;
+};
+
+struct Counters {
+  alignas(64) std::array<uint64_t, 4> counts; 
+};
+
+
 
 int main(int argc, char* argv[]) {
   if (argc < 4 || (argc - 1) % 3 != 0) {
@@ -30,7 +60,7 @@ int main(int argc, char* argv[]) {
   parser.start();
 
   std::vector<std::thread> readers;
-  std::vector<Bases> counters(nt, {0, 0, 0, 0});
+  std::vector<Counters> counters(nt, {0, 0, 0, 0});
   std::atomic<size_t> ctr{0};
 
   for (size_t i = 0; i < nt; ++i) {
@@ -42,30 +72,21 @@ int main(int argc, char* argv[]) {
           for (auto& seqTriple : rg) {
             ++lctr;
             // Count first base of each read in triplet
-            auto& seq1 = seqTriple.first;
-            auto& seq2 = seqTriple.second;
-            auto& seq3 = seqTriple.third;
+            auto& seq1 = seqTriple.first();
+            auto& seq2 = seqTriple.second();
+            auto& seq3 = seqTriple.third();
 
-            for (auto* seq : {&seq1, &seq2, &seq3}) {
-              if (!seq->seq.empty()) {
-                char c = seq->seq[0];
-                switch (c) {
-                case 'A':
-                  counters[i].A++;
-                  break;
-                case 'C':
-                  counters[i].C++;
-                  break;
-                case 'G':
-                  counters[i].G++;
-                  break;
-                case 'T':
-                  counters[i].T++;
-                  break;
-                default:
-                  break;
-                }
-              }
+            for (unsigned char c : seq1.seq) {
+              int idx = lookup[c];
+              if (idx >= 0) { counters[i].counts[idx]++; }
+            }
+            for (unsigned char c : seq2.seq) {
+              int idx = lookup[c];
+              if (idx >= 0) { counters[i].counts[idx]++; }
+            }
+            for (unsigned char c : seq3.seq) {
+              int idx = lookup[c];
+              if (idx >= 0) { counters[i].counts[idx]++; }
             }
           }
           ctr += lctr;
@@ -85,10 +106,10 @@ int main(int argc, char* argv[]) {
 
   Bases b = {0, 0, 0, 0};
   for (size_t i = 0; i < nt; ++i) {
-    b.A += counters[i].A;
-    b.C += counters[i].C;
-    b.G += counters[i].G;
-    b.T += counters[i].T;
+    b.A += counters[i].counts[0];
+    b.C += counters[i].counts[1];
+    b.G += counters[i].counts[2];
+    b.T += counters[i].counts[3];
   }
   std::cerr << "\n";
   std::cerr << "Parsed " << ctr << " total read triplets.\n";

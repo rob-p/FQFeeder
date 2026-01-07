@@ -276,8 +276,8 @@ int assemble_read_pairs(
     if (have1 && have2) {
       // Pair up
       T& pair = (*local)[numWaiting];
-      pair.first = std::move((*chunk1)[idx1++]);
-      pair.second = std::move((*chunk2)[idx2++]);
+      pair[0] = std::move((*chunk1)[idx1++]);
+      pair[1] = std::move((*chunk2)[idx2++]);
       ++numWaiting;
       ++gathered_count;
 
@@ -398,9 +398,9 @@ int assemble_read_triplets(
     if (have1 && have2 && have3) {
       // Triplet up
       T& triplet = (*local)[numWaiting];
-      triplet.first = std::move((*chunk1)[idx1++]);
-      triplet.second = std::move((*chunk2)[idx2++]);
-      triplet.third = std::move((*chunk3)[idx3++]);
+      triplet[0] = std::move((*chunk1)[idx1++]);
+      triplet[1] = std::move((*chunk2)[idx2++]);
+      triplet[2] = std::move((*chunk3)[idx3++]);
       ++numWaiting;
       ++gathered_count;
 
@@ -654,8 +654,8 @@ int parse_read_pairs(
     auto seq2 = make_kstream(fp2, gzread, mode::in);
 
     s = &((*local)[numWaiting]);
-    while ((seq >> s->first) and
-           (seq2 >> s->second)) { // ksv >= 0 and ksv2 >= 0) {
+    while ((seq >> s->first()) and
+           (seq2 >> s->second())) { // ksv >= 0 and ksv2 >= 0) {
       frag_id++;
       numWaiting++;
       // If we've filled the local vector, then dump to the concurrent queue
