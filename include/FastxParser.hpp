@@ -113,15 +113,17 @@ struct ReadTrait<klibpp::KSeq> {
 using ReadSeq = klibpp::KSeq;
 using ReadPair = ReadSet<2>;
 using ReadTriple = ReadSet<3>;
+/*
 using ReadQuad = ReadSet<4>;
 using ReadQuint = ReadSet<5>;
 using ReadSextuple = ReadSet<6>;
 using ReadSeptuple = ReadSet<7>;
 using ReadOctuple = ReadSet<8>;
+using ReadQualQuad = ReadQualSet<4>;
+*/
 
 using ReadQualPair = ReadQualSet<2>;
 using ReadQualTriple = ReadQualSet<3>;
-using ReadQualQuad = ReadQualSet<4>;
 
 // Intermediate structure for parallel parsing - no longer needed with
 // chunk-based queues template <typename T> struct ParsedSingleRead { ... }
