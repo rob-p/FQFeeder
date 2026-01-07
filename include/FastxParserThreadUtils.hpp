@@ -83,6 +83,185 @@ ALWAYS_INLINE void backoffOrYield(size_t& curMaxDelay) {
   backoffExp(curMaxDelay);
 }
 
+// Generic assembler for N-way read sets
+template <typename T, size_t N>
+int assemble_read_set(
+    std::array<std::shared_ptr<moodycamel::ConcurrentQueue<
+        std::unique_ptr<ReadChunk<klibpp::KSeq>>>>, N>& queues,
+    std::array<std::shared_ptr<moodycamel::ConcurrentQueue<
+        std::unique_ptr<ReadChunk<klibpp::KSeq>>>>, N>& recycleQueues,
+    std::array<std::shared_ptr<std::atomic<bool>>, N>& doneFlags,
+    moodycamel::ConsumerToken* cCont,
+    moodycamel::ProducerToken* pRead,
+    moodycamel::ConcurrentQueue<std::unique_ptr<ReadChunk<T>>>& seqContainerQueue,
+    moodycamel::ConcurrentQueue<std::unique_ptr<ReadChunk<T>>>& readQueue,
+    uint32_t file_idx,
+    std::atomic<uint32_t>& numParsing) {  // Changed from numAssembling
+
+  std::array<std::unique_ptr<ReadChunk<klibpp::KSeq>>, N> chunks;
+  std::array<size_t, N> indices{};
+  std::array<bool, N> fileDone{};
+  
+  //std::cerr << "[Thread " << std::this_thread::get_id() << "] Assembler for file " 
+  //        << file_idx << " started (" << N << "-way)\n" << std::flush;
+  
+  //std::cerr << "[ASSEM] Step 1: Arrays created\n" << std::flush;
+  
+  // Get initial output chunk
+  std::unique_ptr<ReadChunk<T>> local;
+  
+  //std::cerr << "[ASSEM] Step 2: About to get initial chunk from seqContainerQueue\n" << std::flush;
+  
+  size_t curMaxDelay = MIN_BACKOFF_ITERS;
+  
+  //std::cerr << "[ASSEM] Step 3: About to try_dequeue, cCont=" << cCont << "\n" << std::flush;
+  
+  // Try without token first to debug
+  bool got_chunk = seqContainerQueue.try_dequeue(*cCont, local);
+  
+  //std::cerr << "[ASSEM] Step 4: try_dequeue returned " << got_chunk << "\n" << std::flush;
+  
+  if (!got_chunk) {
+    //std::cerr << "[ASSEM] Step 5: Entering wait loop\n" << std::flush;
+    while (!seqContainerQueue.try_dequeue(*cCont, local)) {
+      backoffOrYield(curMaxDelay);
+    }
+    //std::cerr << "[ASSEM] Step 6: Got chunk after waiting\n" << std::flush;
+  }
+  
+  //std::cerr << "[ASSEM] Step 7: Got initial output chunk, size=" << local->size() << "\n" << std::flush;
+  
+  /*
+  std::cerr << "[ASSEM] Checking queues array:\n" << std::flush;
+  for (size_t i = 0; i < N; ++i) {
+    std::cerr << "[ASSEM]   queues[" << i << "] = " << queues[i].get() << "\n" << std::flush;
+    std::cerr << "[ASSEM]   recycleQueues[" << i << "] = " << recycleQueues[i].get() << "\n" << std::flush;
+    std::cerr << "[ASSEM]   doneFlags[" << i << "] = " << doneFlags[i].get() << "\n" << std::flush;
+  }
+  */
+  
+  size_t numObtained = local->size();
+  size_t numWaiting = 0;
+  uint64_t gathered_count = 0;
+
+  // Lambda to fetch chunk from a specific queue
+  auto fetch_chunk = [&](size_t idx) -> bool {
+    if (chunks[idx] && indices[idx] < chunks[idx]->size())
+      return true;
+    if (fileDone[idx])
+      return false;
+
+    std::unique_ptr<ReadChunk<klibpp::KSeq>> next_chunk;
+    // Access the shared_ptr at queues[idx] and dereference it
+    if (queues[idx]->try_dequeue(next_chunk)) {
+      if (next_chunk == nullptr) {
+        fileDone[idx] = true;
+        if (chunks[idx])
+          recycleQueues[idx]->enqueue(std::move(chunks[idx]));
+        chunks[idx] = nullptr;
+        return false;
+      }
+      if (chunks[idx]) {
+        recycleQueues[idx]->enqueue(std::move(chunks[idx]));
+      }
+      chunks[idx] = std::move(next_chunk);
+      indices[idx] = 0;
+      return true;
+    }
+    return false;
+  };
+
+  // Check if all files are done
+  auto all_done = [&]() {
+    for (size_t i = 0; i < N; ++i) {
+      if (!fileDone[i] || chunks[i])
+        return false;
+    }
+    return true;
+  };
+
+  while (!all_done()) {
+    // Try to fetch from all queues to update their done status
+    std::array<bool, N> haveData;
+    for (size_t i = 0; i < N; ++i) {
+      haveData[i] = fetch_chunk(i);
+    }
+    
+    // Check if all queues have data
+    bool allHaveData = true;
+    for (size_t i = 0; i < N; ++i) {
+      if (!haveData[i]) {
+        allHaveData = false;
+        break;
+      }
+    }
+    
+    if (allHaveData) {
+      // Assemble N-tuple
+      T& readSet = (*local)[numWaiting];
+      for (size_t i = 0; i < N; ++i) {
+        readSet[i] = std::move((*chunks[i])[indices[i]++]);
+      }
+      ++numWaiting;
+      ++gathered_count;
+      
+      /*
+      if (numWaiting % 100 == 0) {
+        std::cerr << "[Thread " << std::this_thread::get_id() << "] Assembled " 
+                  << numWaiting << " read sets\n" << std::flush;
+      }
+      */
+
+      if (numWaiting == numObtained) {
+        local->have(numWaiting);
+        local->set_chunk_frag_offset(file_idx, gathered_count - numWaiting);
+        
+        curMaxDelay = MIN_BACKOFF_ITERS;
+        while (!readQueue.try_enqueue(*pRead, std::move(local))) {
+          backoffOrYield(curMaxDelay);
+        }
+
+        // Get next output chunk
+        numWaiting = 0;
+        curMaxDelay = MIN_BACKOFF_ITERS;
+        while (!seqContainerQueue.try_dequeue(*cCont, local)) {
+          backoffOrYield(curMaxDelay);
+        }
+        numObtained = local->size();
+      }
+    } else {
+      // Not all queues have data, but check if we're done before backing off
+      if (all_done()) {
+        break;
+      }
+      size_t kBackoff = MIN_BACKOFF_ITERS;
+      backoffOrYield(kBackoff);
+    }
+  }
+
+  // Flush remaining
+  if (numWaiting > 0) {
+    local->have(numWaiting);
+    local->set_chunk_frag_offset(file_idx, gathered_count - numWaiting);
+    curMaxDelay = MIN_BACKOFF_ITERS;
+    while (!readQueue.try_enqueue(*pRead, std::move(local))) {
+      backoffOrYield(curMaxDelay);
+    }
+  } else {
+    curMaxDelay = MIN_BACKOFF_ITERS;
+    while (!seqContainerQueue.try_enqueue(std::move(local))) {
+      backoffOrYield(curMaxDelay);
+    }
+  }
+
+  --numParsing;  // Changed from numAssembling
+  /*
+  std::cerr << "[Thread " << std::this_thread::get_id() << "] Assembler for file " 
+            << file_idx << " finished, numParsing=" << numParsing.load() << "\n" << std::flush;
+  */
+  return 0;
+}
+
 } // namespace thread_utils
 } // namespace fastx_parser
 

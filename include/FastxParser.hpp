@@ -239,6 +239,10 @@ private:
   std::vector<std::unique_ptr<moodycamel::ProducerToken>> produceReads_;
   std::vector<std::unique_ptr<moodycamel::ConsumerToken>> consumeContainers_;
   bool isActive_{false};
+
+  // Helper for parallel parsing of N-way read sets
+  template <size_t N>
+  bool start_parallel_parsing_impl(std::array<std::vector<std::string>*, N> inputStreamArrays);
 };
 } // namespace fastx_parser
 
