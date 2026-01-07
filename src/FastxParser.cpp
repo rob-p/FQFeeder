@@ -19,8 +19,6 @@ namespace fastx_parser {
 // Parallel parsing functions for multi-file modes
 // ============================================================================
 
-// Parse a single file and push reads with their rank to an intermediate queue
-// Uses bulk enqueueing for efficiency
 // Parse a single file and push ReadChunks to an intermediate queue
 template <typename SingleReadT>
 int parse_single_file(
@@ -30,7 +28,7 @@ int parse_single_file(
         outputQueue,
     moodycamel::ConcurrentQueue<std::unique_ptr<ReadChunk<SingleReadT>>>&
         recycleQueue,
-  uint32_t chunkSize = 1000) {
+    uint32_t chunkSize = 1000) {
   using namespace klibpp;
   using fastx_parser::thread_utils::MIN_BACKOFF_ITERS;
 
@@ -372,7 +370,7 @@ int parse_read_pairs(
 template <typename T>
 template <size_t N>
 bool FastxParser<T>::start_parallel_parsing_impl() {
-  
+
   if (numParsing_ != 0) {
     return false;
   }
@@ -381,13 +379,14 @@ bool FastxParser<T>::start_parallel_parsing_impl() {
 
   // Validate using inputStreamSets_ directly
   size_t numFiles = inputStreamSets_[0].size();
-  
+
   // Static assert to ensure we have the right arity
-  static_assert(N == ReadTrait<T>::arity, 
+  static_assert(N == ReadTrait<T>::arity,
                 "Template parameter N must match read type arity");
-  
+
   if (inputStreamSets_.size() != N) {
-    throw std::logic_error("inputStreamSets_ size doesn't match template arity");
+    throw std::logic_error(
+        "inputStreamSets_ size doesn't match template arity");
   }
 
   // Validate all file vectors have matching sizes
@@ -408,18 +407,24 @@ bool FastxParser<T>::start_parallel_parsing_impl() {
   std::fill(threadResults_.begin(), threadResults_.end(), 0);
 
   /*
-  std::cerr << "Starting parallel parsing for " << numFiles << " file sets, " 
-            << N << "-way reads, total threads: " << (numFiles * (N + 1)) << "\n";
+  std::cerr << "Starting parallel parsing for " << numFiles << " file sets, "
+            << N << "-way reads, total threads: " << (numFiles * (N + 1)) <<
+  "\n";
 */
   constexpr size_t local_chunk_size = 512;
 
   for (size_t fn = 0; fn < numFiles; ++fn) {
     // Create queues for this file set - HEAP-ALLOCATE the arrays themselves
-    auto queues = std::make_shared<std::array<std::shared_ptr<moodycamel::ConcurrentQueue<
-        std::unique_ptr<ReadChunk<klibpp::KSeq>>>>, N>>();
-    auto recycleQueues = std::make_shared<std::array<std::shared_ptr<moodycamel::ConcurrentQueue<
-        std::unique_ptr<ReadChunk<klibpp::KSeq>>>>, N>>();
-    auto doneFlags = std::make_shared<std::array<std::shared_ptr<std::atomic<bool>>, N>>();
+    auto queues = std::make_shared<
+        std::array<std::shared_ptr<moodycamel::ConcurrentQueue<
+                       std::unique_ptr<ReadChunk<klibpp::KSeq>>>>,
+                   N>>();
+    auto recycleQueues = std::make_shared<
+        std::array<std::shared_ptr<moodycamel::ConcurrentQueue<
+                       std::unique_ptr<ReadChunk<klibpp::KSeq>>>>,
+                   N>>();
+    auto doneFlags =
+        std::make_shared<std::array<std::shared_ptr<std::atomic<bool>>, N>>();
 
     for (size_t i = 0; i < N; ++i) {
       (*queues)[i] = std::make_shared<moodycamel::ConcurrentQueue<
@@ -433,50 +438,50 @@ bool FastxParser<T>::start_parallel_parsing_impl() {
     for (size_t i = 0; i < N; ++i) {
       ++numParsing_;
       const std::string& filename = inputStreamSets_[i][fn];
-      //std::cerr << "Launching parser thread for file " << fn << ", stream " << i << ": " << filename << "\n";
-      parsingThreads_.emplace_back(
-          new std::thread([this, fn, i, queue = (*queues)[i], 
-                          recycleQueue = (*recycleQueues)[i], 
-                          done = (*doneFlags)[i], filename]() {  // Capture filename by value, not reference!
+      // std::cerr << "Launching parser thread for file " << fn << ", stream "
+      // << i << ": " << filename << "\n";
+      parsingThreads_.emplace_back(new std::thread(
+          [this, fn, i, queue = (*queues)[i],
+           recycleQueue = (*recycleQueues)[i], done = (*doneFlags)[i],
+           filename]() { // Capture filename by value, not reference!
             /*
-            std::cerr << "[Parser Thread " << std::this_thread::get_id() << "] Starting to parse: " 
+            std::cerr << "[Parser Thread " << std::this_thread::get_id() << "]
+            Starting to parse: "
                       << filename << "\n" << std::flush;
             */
-            this->threadResults_[fn * (N + 1) + i] = 
-                parse_single_file<klibpp::KSeq>(
-                    filename, fn, this->numParsing_, *done, 
-                    *queue, *recycleQueue, this->blockSize_);
+            this->threadResults_[fn * (N + 1) + i] =
+                parse_single_file<klibpp::KSeq>(filename, fn, this->numParsing_,
+                                                *done, *queue, *recycleQueue,
+                                                this->blockSize_);
             /*
-            std::cerr << "[Parser Thread " << std::this_thread::get_id() << "] Finished parsing: " 
+            std::cerr << "[Parser Thread " << std::this_thread::get_id() << "]
+            Finished parsing: "
                       << filename << "\n" << std::flush;
             */
           }));
     }
 
-    // Launch assembler thread - capture shared_ptrs BY VALUE (remove the & symbols!)
+    // Launch assembler thread - capture shared_ptrs BY VALUE (remove the &
+    // symbols!)
     ++numParsing_;
     size_t tokenIdx = fn % numParsers_;
-    //std::cerr << "Launching assembler thread for file " << fn << "\n";
-    parsingThreads_.emplace_back(
-        new std::thread([this, fn, tokenIdx, queues, recycleQueues, 
-                        doneFlags]() {
-          //std::cerr << "[ASSEM-LAMBDA] Lambda started\n" << std::flush;
-          this->threadResults_[fn * (N + 1) + N] = 
+    // std::cerr << "Launching assembler thread for file " << fn << "\n";
+    parsingThreads_.emplace_back(new std::thread(
+        [this, fn, tokenIdx, queues, recycleQueues, doneFlags]() {
+          // std::cerr << "[ASSEM-LAMBDA] Lambda started\n" << std::flush;
+          this->threadResults_[fn * (N + 1) + N] =
               thread_utils::assemble_read_set<T, N>(
                   *queues, *recycleQueues, *doneFlags,
                   this->consumeContainers_[tokenIdx].get(),
-                  this->produceReads_[tokenIdx].get(),
-                  this->seqContainerQueue_,
-                  this->readQueue_,
-                  fn,
-                  this->numParsing_);  // Pass numParsing_ for decrement
-          //std::cerr << "[ASSEM-LAMBDA] Lambda finished\n" << std::flush;
+                  this->produceReads_[tokenIdx].get(), this->seqContainerQueue_,
+                  this->readQueue_, fn,
+                  this->numParsing_); // Pass numParsing_ for decrement
+          // std::cerr << "[ASSEM-LAMBDA] Lambda finished\n" << std::flush;
         }));
   }
 
   return true;
 }
-
 
 template <> bool FastxParser<ReadSeq>::start() {
   if (numParsing_ == 0) {
@@ -498,7 +503,6 @@ template <> bool FastxParser<ReadSeq>::start() {
   }
 }
 
-
 template <> bool FastxParser<ReadPair>::start() {
   if (parallelParsing_ && inputStreamSets_.size() > 0) {
     return start_parallel_parsing_impl<2>();
@@ -507,8 +511,8 @@ template <> bool FastxParser<ReadPair>::start() {
     if (numParsing_ == 0) {
       isActive_ = true;
       if (inputStreams_.size() != inputStreams2_.size()) {
-        throw std::invalid_argument(
-            "There should be the same number of files for the left and right reads");
+        throw std::invalid_argument("There should be the same number of files "
+                                    "for the left and right reads");
       }
 
       threadResults_.resize(numParsers_);
@@ -518,9 +522,10 @@ template <> bool FastxParser<ReadPair>::start() {
         ++numParsing_;
         parsingThreads_.emplace_back(new std::thread([this, i]() {
           this->threadResults_[i] = parse_read_pairs(
-              this->inputStreamSets_[0], this->inputStreamSets_[0], this->numParsing_,
-              this->consumeContainers_[i].get(), this->produceReads_[i].get(),
-              this->workQueue_, this->seqContainerQueue_, this->readQueue_);
+              this->inputStreamSets_[0], this->inputStreamSets_[0],
+              this->numParsing_, this->consumeContainers_[i].get(),
+              this->produceReads_[i].get(), this->workQueue_,
+              this->seqContainerQueue_, this->readQueue_);
         }));
       }
       return true;
@@ -543,9 +548,10 @@ template <> bool FastxParser<ReadQualPair>::start() {
         ++numParsing_;
         parsingThreads_.emplace_back(new std::thread([this, i]() {
           this->threadResults_[i] = parse_read_pairs(
-              this->inputStreamSets_[0], this->inputStreamSets_[1], this->numParsing_,
-              this->consumeContainers_[i].get(), this->produceReads_[i].get(),
-              this->workQueue_, this->seqContainerQueue_, this->readQueue_);
+              this->inputStreamSets_[0], this->inputStreamSets_[1],
+              this->numParsing_, this->consumeContainers_[i].get(),
+              this->produceReads_[i].get(), this->workQueue_,
+              this->seqContainerQueue_, this->readQueue_);
         }));
       }
       return true;

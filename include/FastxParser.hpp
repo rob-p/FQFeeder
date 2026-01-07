@@ -1,18 +1,18 @@
 #ifndef __FASTX_PARSER__
 #define __FASTX_PARSER__
 
+#include "concurrentqueue.h"
 #include "fcntl.h"
+#include "kseq++.hpp"
 #include "unistd.h"
 #include <atomic>
 #include <cstdio>
 #include <cstdlib>
 #include <iostream>
-#include <thread>
-#include <vector>
-#include <utility>
 #include <memory>
-#include "kseq++.hpp"
-#include "concurrentqueue.h"
+#include <thread>
+#include <utility>
+#include <vector>
 
 using std::make_unique;
 
@@ -24,7 +24,7 @@ struct ParserConfig {
   uint32_t numParsers{1};
   uint32_t chunkSize{1000};
   bool parallelParsing{true};
-  
+
   static ParserConfig with_consumers_single(uint32_t numConsumers) {
     return {numConsumers, 1, 1000, false};
   }
@@ -35,8 +35,7 @@ struct ParserConfig {
 };
 
 class ParserConfigBuilder {
-public :
-
+public:
   ParserConfigBuilder() = default;
 
   ParserConfigBuilder& with_consumers(uint32_t numConsumers) {
@@ -60,101 +59,109 @@ public :
   }
 
   ParserConfig build() { return c_; }
+
 private:
   ParserConfig c_;
 };
 
-
 // holds a "set" of files that correspond to components (in different files)
-// of the same fragment. For single-end reads, this is just a file, for 
+// of the same fragment. For single-end reads, this is just a file, for
 // paired-end reads, it is a pair of files, etc.
 struct FileGroup {
-  template<typename... Strings>
+  template <typename... Strings>
   explicit FileGroup(Strings&&... strs)
-    : file_names{std::forward<Strings>(strs)...}
-    , arity(sizeof...(strs))
-  {}
+      : file_names{std::forward<Strings>(strs)...}, arity(sizeof...(strs)) {}
 
-  template<typename Iterator>
+  template <typename Iterator>
   FileGroup(Iterator first, Iterator last)
-    : file_names(first, last)
-    , arity(file_names.size())
-  {}
+      : file_names(first, last), arity(file_names.size()) {}
 
   std::vector<std::string> file_names;
   size_t arity{0};
 };
 
 // forward declaration of hte read trait
-template <typename T> 
-struct ReadTrait;
+template <typename T> struct ReadTrait;
 
 // Generic ReadSet that works for any arity
-template <size_t N>
-struct ReadSet {
-    std::array<klibpp::KSeq, N> reads;
-    
-    // Array-like access
-    klibpp::KSeq& operator[](size_t i) { return reads[i]; }
-    const klibpp::KSeq& operator[](size_t i) const { return reads[i]; }
-    
-    // Named accessors for convenience (only enabled when N is large enough)
-    template<size_t M = N, typename = std::enable_if_t<(M >= 1)>>
-    klibpp::KSeq& first() { return reads[0]; }
-    
-    template<size_t M = N, typename = std::enable_if_t<(M >= 2)>>
-    klibpp::KSeq& second() { return reads[1]; }
-    
-    template<size_t M = N, typename = std::enable_if_t<(M >= 3)>>
-    klibpp::KSeq& third() { return reads[2]; }
-    
-    template<size_t M = N, typename = std::enable_if_t<(M >= 1)>>
-    const klibpp::KSeq& first() const { return reads[0]; }
-    
-    template<size_t M = N, typename = std::enable_if_t<(M >= 2)>>
-    const klibpp::KSeq& second() const { return reads[1]; }
-    
-    template<size_t M = N, typename = std::enable_if_t<(M >= 3)>>
-    const klibpp::KSeq& third() const { return reads[2]; }
+template <size_t N> struct ReadSet {
+  std::array<klibpp::KSeq, N> reads;
+
+  // Array-like access
+  klibpp::KSeq& operator[](size_t i) { return reads[i]; }
+  const klibpp::KSeq& operator[](size_t i) const { return reads[i]; }
+
+  // Named accessors for convenience (only enabled when N is large enough)
+  template <size_t M = N, typename = std::enable_if_t<(M >= 1)>>
+  klibpp::KSeq& first() {
+    return reads[0];
+  }
+
+  template <size_t M = N, typename = std::enable_if_t<(M >= 2)>>
+  klibpp::KSeq& second() {
+    return reads[1];
+  }
+
+  template <size_t M = N, typename = std::enable_if_t<(M >= 3)>>
+  klibpp::KSeq& third() {
+    return reads[2];
+  }
+
+  template <size_t M = N, typename = std::enable_if_t<(M >= 1)>>
+  const klibpp::KSeq& first() const {
+    return reads[0];
+  }
+
+  template <size_t M = N, typename = std::enable_if_t<(M >= 2)>>
+  const klibpp::KSeq& second() const {
+    return reads[1];
+  }
+
+  template <size_t M = N, typename = std::enable_if_t<(M >= 3)>>
+  const klibpp::KSeq& third() const {
+    return reads[2];
+  }
 };
 
 // Specialization of ReadTrait for ReadSet<N>
-template <size_t N>
-struct ReadTrait<ReadSet<N>> {
-    static constexpr size_t arity = N;
-    static klibpp::KSeq& get(ReadSet<N>& t, size_t i) { return t[i]; }
+template <size_t N> struct ReadTrait<ReadSet<N>> {
+  static constexpr size_t arity = N;
+  static klibpp::KSeq& get(ReadSet<N>& t, size_t i) { return t[i]; }
 };
 
 // If you want to distinguish qual vs non-qual types:
-template <size_t N>
-struct ReadQualSet {
-    std::array<klibpp::KSeq, N> reads;
-    
-    klibpp::KSeq& operator[](size_t i) { return reads[i]; }
-    const klibpp::KSeq& operator[](size_t i) const { return reads[i]; }
-    
-    template<size_t M = N, typename = std::enable_if_t<(M >= 1)>>
-    klibpp::KSeq& first() { return reads[0]; }
-    
-    template<size_t M = N, typename = std::enable_if_t<(M >= 2)>>
-    klibpp::KSeq& second() { return reads[1]; }
-    
-    template<size_t M = N, typename = std::enable_if_t<(M >= 3)>>
-    klibpp::KSeq& third() { return reads[2]; }
+template <size_t N> struct ReadQualSet {
+  std::array<klibpp::KSeq, N> reads;
+
+  klibpp::KSeq& operator[](size_t i) { return reads[i]; }
+  const klibpp::KSeq& operator[](size_t i) const { return reads[i]; }
+
+  template <size_t M = N, typename = std::enable_if_t<(M >= 1)>>
+  klibpp::KSeq& first() {
+    return reads[0];
+  }
+
+  template <size_t M = N, typename = std::enable_if_t<(M >= 2)>>
+  klibpp::KSeq& second() {
+    return reads[1];
+  }
+
+  template <size_t M = N, typename = std::enable_if_t<(M >= 3)>>
+  klibpp::KSeq& third() {
+    return reads[2];
+  }
 };
 
 // Specialization of ReadTrait for ReadQualSet<N>
-template <size_t N>
-struct ReadTrait<ReadQualSet<N>> {
-    static constexpr size_t arity = N;
-    static klibpp::KSeq& get(ReadQualSet<N>& t, size_t i) { return t[i]; }
+template <size_t N> struct ReadTrait<ReadQualSet<N>> {
+  static constexpr size_t arity = N;
+  static klibpp::KSeq& get(ReadQualSet<N>& t, size_t i) { return t[i]; }
 };
 
 // Specialization for KSeq (single read) - keep this for backward compatibility
-template <>
-struct ReadTrait<klibpp::KSeq> {
-    static constexpr size_t arity = 1;
-    static klibpp::KSeq& get(klibpp::KSeq& t, size_t) { return t; }
+template <> struct ReadTrait<klibpp::KSeq> {
+  static constexpr size_t arity = 1;
+  static klibpp::KSeq& get(klibpp::KSeq& t, size_t) { return t; }
 };
 
 // Type aliases for convenience and backward compatibility
@@ -248,19 +255,16 @@ public:
               bool parallelParsing = true);
 
   template <typename... FileVectors>
-  FastxParser(
-    fastx_parser::ParserConfig& c,
-    FileVectors&&... fileVectors)
-    : inputStreamSets_{std::forward<FileVectors>(fileVectors)...},
-    numParsing_(0),
-    parallelParsing_(c.parallelParsing),
-    blockSize_(c.chunkSize) {
+  FastxParser(fastx_parser::ParserConfig& c, FileVectors&&... fileVectors)
+      : inputStreamSets_{std::forward<FileVectors>(fileVectors)...},
+        numParsing_(0), parallelParsing_(c.parallelParsing),
+        blockSize_(c.chunkSize) {
 
     constexpr size_t arity = sizeof...(fileVectors);
 
     // Static assert to ensure arity matches T
-    static_assert(arity == ReadTrait<T>::arity, 
-    "Number of file vectors must match read type arity");
+    static_assert(arity == ReadTrait<T>::arity,
+                  "Number of file vectors must match read type arity");
 
     // Validate that all vectors have the same size
     if (inputStreamSets_.empty()) {
@@ -271,7 +275,7 @@ public:
     for (size_t i = 1; i < arity; ++i) {
       if (inputStreamSets_[i].size() != numFiles) {
         throw std::invalid_argument(
-          "All file vectors must have the same number of files");
+            "All file vectors must have the same number of files");
       }
     }
 
@@ -280,7 +284,8 @@ public:
       for (size_t i = 0; i < arity; ++i) {
         for (size_t j = i + 1; j < arity; ++j) {
           if (inputStreamSets_[i][fileIdx] == inputStreamSets_[j][fileIdx]) {
-            std::cerr << "[WARNING]: Same file provided for multiple reads: " << inputStreamSets_[i][fileIdx] << "\n";
+            std::cerr << "[WARNING]: Same file provided for multiple reads: "
+                      << inputStreamSets_[i][fileIdx] << "\n";
           }
         }
       }
@@ -288,8 +293,10 @@ public:
 
     // Adjust numParsers if needed
     if (c.numParsers > numFiles) {
-      std::cerr << "[INFO]: Can't make use of more parsing threads than file sets; "
-        "setting # of parsing threads to " << numFiles << '\n';
+      std::cerr
+          << "[INFO]: Can't make use of more parsing threads than file sets; "
+             "setting # of parsing threads to "
+          << numFiles << '\n';
       c.numParsers = numFiles;
     }
     numParsers_ = c.numParsers;
@@ -297,11 +304,11 @@ public:
 
     // Initialize concurrent queues
     readQueue_ = moodycamel::ConcurrentQueue<std::unique_ptr<ReadChunk<T>>>(
-      4 * c.numConsumers, c.numParsers, 0);
+        4 * c.numConsumers, c.numParsers, 0);
 
     seqContainerQueue_ =
-      moodycamel::ConcurrentQueue<std::unique_ptr<ReadChunk<T>>>(
-        4 * c.numConsumers, 1 + c.numConsumers, 0);
+        moodycamel::ConcurrentQueue<std::unique_ptr<ReadChunk<T>>>(
+            4 * c.numConsumers, 1 + c.numConsumers, 0);
 
     workQueue_ = moodycamel::ConcurrentQueue<uint32_t>(numParsers_);
 
@@ -313,7 +320,7 @@ public:
     // Create tokens for each parsing thread
     for (size_t i = 0; i < numParsers_; ++i) {
       consumeContainers_.emplace_back(
-        new moodycamel::ConsumerToken(seqContainerQueue_));
+          new moodycamel::ConsumerToken(seqContainerQueue_));
       produceReads_.emplace_back(new moodycamel::ProducerToken(readQueue_));
     }
 
@@ -366,8 +373,7 @@ private:
   bool isActive_{false};
 
   // Helper for parallel parsing of N-way read sets
-  template <size_t N>
-  bool start_parallel_parsing_impl();
+  template <size_t N> bool start_parallel_parsing_impl();
 };
 } // namespace fastx_parser
 
