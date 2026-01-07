@@ -42,9 +42,9 @@ int main(int argc, char* argv[]) {
           for (auto& seqTriple : rg) {
             ++lctr;
             // Count first base of each read in triplet
-            auto& seq1 = seqTriple.first;
-            auto& seq2 = seqTriple.second;
-            auto& seq3 = seqTriple.third;
+            auto& seq1 = seqTriple.first();
+            auto& seq2 = seqTriple.second();
+            auto& seq3 = seqTriple.third();
 
             for (auto* seq : {&seq1, &seq2, &seq3}) {
               if (!seq->seq.empty()) {

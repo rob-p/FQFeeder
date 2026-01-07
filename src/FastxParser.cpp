@@ -96,16 +96,6 @@ int parse_single_file(
   return result;
 }
 
-// Helper to unpack indices
-template <typename F, size_t... Is>
-void apply_indices_impl(std::index_sequence<Is...>, F&& f) {
-  f(std::integral_constant<size_t, Is>{}...);
-}
-
-template <size_t N, typename F> void apply_indices(F&& f) {
-  apply_indices_impl(std::make_index_sequence<N>{}, std::forward<F>(f));
-}
-
 // Helper to unpack a tuple of queues and call assemble_reads
 template <typename T, typename... Queues>
 int assemble_reads(
@@ -140,19 +130,17 @@ int assemble_reads(
   size_t numWaiting = 0;
   uint64_t gathered_count = 0;
 
-  auto fetch_chunk = [](auto* queue, auto& chunk, size_t& idx, bool& done,
-                        auto* recycleQueue) {
-    // std::cerr << "fetch_chunk: checking queue " << queue << "\n";
+  auto fetch_chunk = [](auto queue, auto& chunk, size_t& idx, bool& done,
+                      auto recycleQueue) {
     if (chunk && idx < chunk->size())
-      return true; // Have data
+      return true;
     if (done)
-      return false; // Done and exhausted
+      return false;
 
-    // Need new chunk
     std::unique_ptr<ReadChunk<klibpp::KSeq>> next_chunk;
     if (queue->try_dequeue(next_chunk)) {
       if (next_chunk == nullptr) {
-        done = true; // Received EOF signal
+        done = true;
         if (chunk)
           recycleQueue->enqueue(std::move(chunk));
         chunk = nullptr;
@@ -165,7 +153,7 @@ int assemble_reads(
       idx = 0;
       return true;
     }
-    return false; // Queue empty, but not done
+    return false;
   };
 
   while (true) {
@@ -176,10 +164,10 @@ int assemble_reads(
     // Use apply_indices to iterate
     // std::cerr << "assemble_reads: calling check_inputs\n";
     auto check_inputs = [&](auto... Is) {
-      ((allHave &= fetch_chunk(std::get<Is>(queues), chunks[Is], indices[Is],
-                               filesDone[Is], std::get<Is>(recycleQueues))),
-       ...);
-      ((allDone &= (filesDone[Is] && !chunks[Is])), ...);
+      ((allHave &= fetch_chunk(std::get<Is.value>(queues), chunks[Is.value], indices[Is.value],
+                               filesDone[Is.value], std::get<Is.value>(recycleQueues))),
+        ...);
+      ((allDone &= (filesDone[Is.value] && !chunks[Is.value])), ...);
     };
 
     apply_indices<Arity>([&](auto... args) { check_inputs(args...); });
@@ -189,6 +177,25 @@ int assemble_reads(
 
     if (allHave) {
       // Assemble
+        std::cerr << "About to get readUnion reference\n";
+  T& readUnion = (*local)[numWaiting];
+  std::cerr << "Got readUnion reference\n";
+
+      auto assign = [&](auto... Is) {
+        ((ReadTrait<T>::get(readUnion, Is.value) = 
+          std::move((*chunks[Is.value])[indices[Is.value]++])),
+          ...);
+      };
+
+      std::cerr << "About to call apply_indices for assign\n";
+      apply_indices<Arity>([&](auto... args) { 
+        std::cerr << "Inside apply_indices assign\n";
+        assign(args...); 
+      });
+      std::cerr << "assign completed\n";
+
+      /*
+      // Assemble
       T& readUnion = (*local)[numWaiting];
 
       auto assign = [&](auto... Is) {
@@ -197,7 +204,7 @@ int assemble_reads(
          ...);
       };
       apply_indices<Arity>([&](auto... args) { assign(args...); });
-
+      */
       ++numWaiting;
       ++gathered_count;
 
@@ -381,7 +388,7 @@ template <typename T> bool FastxParser<T>::start() {
           std::cerr << "Launching parser thread group " << fn << " file " << i
                     << "\n";
           parsingThreads_.emplace_back(
-              new std::thread([this, fn, i, queues, recycleQueues, dones]() {
+              new std::thread([this, fn, i, queues, recycleQueues, dones, Arity]() {
                 this->threadResults_[fn * (Arity + 1) + i] =
                     parse_single_file<klibpp::KSeq>(
                         this->inputStreams_[i].files[fn], fn, this->numParsing_,
@@ -397,7 +404,7 @@ template <typename T> bool FastxParser<T>::start() {
 
         parsingThreads_.emplace_back(
             new std::thread([this, fn, queues, recycleQueues, dones, tokenIdx,
-                             numAssembling]() {
+                             numAssembling, Arity]() {
               // Helper to convert vector to tuple and call assemble_reads
               auto convert_and_call = [&](auto... Is) {
                 auto queue_tuple = std::make_tuple(queues[Is].get()...);
@@ -492,12 +499,137 @@ template <typename T> bool FastxParser<T>::stop() {
   return ret;
 }
 
+template <typename T> bool FastxParser<T>::refill(ReadGroup<T>& seqs) {
+  finishedWithGroup(seqs);
+  auto curMaxDelay = fastx_parser::thread_utils::MIN_BACKOFF_ITERS;
+  while (numParsing_ > 0) {
+    if (readQueue_.try_dequeue(seqs.consumerToken(), seqs.chunkPtr())) {
+      return true;
+    }
+    fastx_parser::thread_utils::backoffOrYield(curMaxDelay);
+  }
+  return readQueue_.try_dequeue(seqs.consumerToken(), seqs.chunkPtr());
+}
+
+template <typename T> void FastxParser<T>::finishedWithGroup(ReadGroup<T>& s) {
+  // If this read group is holding a valid chunk, then give it back
+  if (!s.empty()) {
+    seqContainerQueue_.enqueue(s.producerToken(), std::move(s.takeChunkPtr()));
+    s.setChunkEmpty();
+  }
+}
+
 // Instantiate templates
+/*
 template class FastxParser<ReadSeq>;
 template class FastxParser<ReadPair>;
 template class FastxParser<ReadTriple>;
 // template class FastxParser<ReadQual>; // Duplicate of ReadSeq
 template class FastxParser<ReadQualPair>;
 template class FastxParser<ReadQualTriple>;
+*/
+
+// Helper to generate tuple types with N queue pointers
+template<size_t N>
+struct QueueTuple {
+    using type = decltype(std::tuple_cat(
+        std::declval<typename QueueTuple<N-1>::type>(),
+        std::declval<std::tuple<moodycamel::ConcurrentQueue<std::unique_ptr<ReadChunk<klibpp::KSeq>>>*>>()
+    ));
+};
+
+template<>
+struct QueueTuple<1> {
+    using type = std::tuple<moodycamel::ConcurrentQueue<std::unique_ptr<ReadChunk<klibpp::KSeq>>>*>;
+};
+
+template<>
+struct QueueTuple<0> {
+    using type = std::tuple<>;
+};
+
+// Explicitly instantiate parse_single_file for KSeq
+template int parse_single_file<klibpp::KSeq>(
+    const std::string& filename, uint32_t file_idx,
+    std::atomic<uint32_t>& numParsing, std::atomic<bool>& parsingDone,
+    moodycamel::ConcurrentQueue<std::unique_ptr<ReadChunk<klibpp::KSeq>>>& outputQueue,
+    moodycamel::ConcurrentQueue<std::unique_ptr<ReadChunk<klibpp::KSeq>>>& recycleQueue,
+    uint32_t chunkSize);
+
+// Macro to instantiate assemble_reads for ReadSet<N>
+#define INSTANTIATE_ASSEMBLE_READS_N(N) \
+template int assemble_reads<ReadSet<N>>( \
+    typename QueueTuple<N>::type& queues, \
+    typename QueueTuple<N>::type& recycleQueues, \
+    const std::vector<std::shared_ptr<std::atomic<bool>>>& dones, \
+    moodycamel::ConsumerToken* cCont, \
+    moodycamel::ProducerToken* pRead, \
+    moodycamel::ConcurrentQueue<std::unique_ptr<ReadChunk<ReadSet<N>>>>& seqContainerQueue, \
+    moodycamel::ConcurrentQueue<std::unique_ptr<ReadChunk<ReadSet<N>>>>& readQueue, \
+    uint32_t file_idx, \
+    std::atomic<uint32_t>& numAssembling);
+
+// Macro for ReadQualSet<N>
+#define INSTANTIATE_ASSEMBLE_READS_QUAL_N(N) \
+template int assemble_reads<ReadQualSet<N>>( \
+    typename QueueTuple<N>::type& queues, \
+    typename QueueTuple<N>::type& recycleQueues, \
+    const std::vector<std::shared_ptr<std::atomic<bool>>>& dones, \
+    moodycamel::ConsumerToken* cCont, \
+    moodycamel::ProducerToken* pRead, \
+    moodycamel::ConcurrentQueue<std::unique_ptr<ReadChunk<ReadQualSet<N>>>>& seqContainerQueue, \
+    moodycamel::ConcurrentQueue<std::unique_ptr<ReadChunk<ReadQualSet<N>>>>& readQueue, \
+    uint32_t file_idx, \
+    std::atomic<uint32_t>& numAssembling);
+
+// Instantiate for single reads (KSeq) - using ReadSeq alias
+template int assemble_reads<klibpp::KSeq>(
+    typename QueueTuple<1>::type& queues,
+    typename QueueTuple<1>::type& recycleQueues,
+    const std::vector<std::shared_ptr<std::atomic<bool>>>& dones,
+    moodycamel::ConsumerToken* cCont,
+    moodycamel::ProducerToken* pRead,
+    moodycamel::ConcurrentQueue<std::unique_ptr<ReadChunk<klibpp::KSeq>>>& seqContainerQueue,
+    moodycamel::ConcurrentQueue<std::unique_ptr<ReadChunk<klibpp::KSeq>>>& readQueue,
+    uint32_t file_idx,
+    std::atomic<uint32_t>& numAssembling);
+
+// Instantiate ReadSet for arities 2-8
+INSTANTIATE_ASSEMBLE_READS_N(2)
+INSTANTIATE_ASSEMBLE_READS_N(3)
+INSTANTIATE_ASSEMBLE_READS_N(4)
+INSTANTIATE_ASSEMBLE_READS_N(5)
+INSTANTIATE_ASSEMBLE_READS_N(6)
+INSTANTIATE_ASSEMBLE_READS_N(7)
+INSTANTIATE_ASSEMBLE_READS_N(8)
+
+// Instantiate ReadQualSet for arities 2-8
+INSTANTIATE_ASSEMBLE_READS_QUAL_N(2)
+INSTANTIATE_ASSEMBLE_READS_QUAL_N(3)
+INSTANTIATE_ASSEMBLE_READS_QUAL_N(4)
+INSTANTIATE_ASSEMBLE_READS_QUAL_N(5)
+INSTANTIATE_ASSEMBLE_READS_QUAL_N(6)
+INSTANTIATE_ASSEMBLE_READS_QUAL_N(7)
+INSTANTIATE_ASSEMBLE_READS_QUAL_N(8)
+
+#undef INSTANTIATE_ASSEMBLE_READS_N
+#undef INSTANTIATE_ASSEMBLE_READS_QUAL_N
+
+// Instantiate FastxParser for all types
+template class FastxParser<klibpp::KSeq>;
+template class FastxParser<ReadSet<2>>;
+template class FastxParser<ReadSet<3>>;
+template class FastxParser<ReadSet<4>>;
+template class FastxParser<ReadSet<5>>;
+template class FastxParser<ReadSet<6>>;
+template class FastxParser<ReadSet<7>>;
+template class FastxParser<ReadSet<8>>;
+template class FastxParser<ReadQualSet<2>>;
+template class FastxParser<ReadQualSet<3>>;
+template class FastxParser<ReadQualSet<4>>;
+template class FastxParser<ReadQualSet<5>>;
+template class FastxParser<ReadQualSet<6>>;
+template class FastxParser<ReadQualSet<7>>;
+template class FastxParser<ReadQualSet<8>>;
 
 } // namespace fastx_parser

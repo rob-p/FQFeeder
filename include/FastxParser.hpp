@@ -60,8 +60,10 @@ typename _Unique_if<T>::_Known_bound make_unique(Args&&...) = delete;
 
 namespace fastx_parser {
 
+/*
 using ReadSeq = klibpp::KSeq;
 using ReadQual = klibpp::KSeq;
+
 
 // The ReadPair and ReadQualPair are obviously
 // redundant. But, having them as separate types
@@ -143,6 +145,102 @@ template <> struct ReadTrait<klibpp::KSeq> {
   static constexpr size_t arity = 1;
   static klibpp::KSeq& get(klibpp::KSeq& t, size_t i) { return t; }
 };
+*/
+
+template <typename T> 
+struct ReadTrait;
+
+// Generic ReadSet that works for any arity
+template <size_t N>
+struct ReadSet {
+    std::array<klibpp::KSeq, N> reads;
+    
+    // Array-like access
+    klibpp::KSeq& operator[](size_t i) { return reads[i]; }
+    const klibpp::KSeq& operator[](size_t i) const { return reads[i]; }
+    
+    // Named accessors for convenience (only enabled when N is large enough)
+    template<size_t M = N, typename = std::enable_if_t<(M >= 1)>>
+    klibpp::KSeq& first() { return reads[0]; }
+    
+    template<size_t M = N, typename = std::enable_if_t<(M >= 2)>>
+    klibpp::KSeq& second() { return reads[1]; }
+    
+    template<size_t M = N, typename = std::enable_if_t<(M >= 3)>>
+    klibpp::KSeq& third() { return reads[2]; }
+    
+    template<size_t M = N, typename = std::enable_if_t<(M >= 1)>>
+    const klibpp::KSeq& first() const { return reads[0]; }
+    
+    template<size_t M = N, typename = std::enable_if_t<(M >= 2)>>
+    const klibpp::KSeq& second() const { return reads[1]; }
+    
+    template<size_t M = N, typename = std::enable_if_t<(M >= 3)>>
+    const klibpp::KSeq& third() const { return reads[2]; }
+};
+
+// Specialization of ReadTrait for ReadSet<N>
+template <size_t N>
+struct ReadTrait<ReadSet<N>> {
+    static constexpr size_t arity = N;
+    static klibpp::KSeq& get(ReadSet<N>& t, size_t i) { return t[i]; }
+};
+
+// If you want to distinguish qual vs non-qual types:
+template <size_t N>
+struct ReadQualSet {
+    std::array<klibpp::KSeq, N> reads;
+    
+    klibpp::KSeq& operator[](size_t i) { return reads[i]; }
+    const klibpp::KSeq& operator[](size_t i) const { return reads[i]; }
+    
+    template<size_t M = N, typename = std::enable_if_t<(M >= 1)>>
+    klibpp::KSeq& first() { return reads[0]; }
+    
+    template<size_t M = N, typename = std::enable_if_t<(M >= 2)>>
+    klibpp::KSeq& second() { return reads[1]; }
+    
+    template<size_t M = N, typename = std::enable_if_t<(M >= 3)>>
+    klibpp::KSeq& third() { return reads[2]; }
+};
+
+// Specialization of ReadTrait for ReadQualSet<N>
+template <size_t N>
+struct ReadTrait<ReadQualSet<N>> {
+    static constexpr size_t arity = N;
+    static klibpp::KSeq& get(ReadQualSet<N>& t, size_t i) { return t[i]; }
+};
+
+// Specialization for KSeq (single read) - keep this for backward compatibility
+template <>
+struct ReadTrait<klibpp::KSeq> {
+    static constexpr size_t arity = 1;
+    static klibpp::KSeq& get(klibpp::KSeq& t, size_t) { return t; }
+};
+
+// Type aliases for convenience and backward compatibility
+using ReadSeq = klibpp::KSeq;
+using ReadPair = ReadSet<2>;
+using ReadTriple = ReadSet<3>;
+using ReadQuad = ReadSet<4>;
+using ReadQuint = ReadSet<5>;
+using ReadSextuple = ReadSet<6>;
+using ReadSeptuple = ReadSet<7>;
+using ReadOctuple = ReadSet<8>;
+
+using ReadQualPair = ReadQualSet<2>;
+using ReadQualTriple = ReadQualSet<3>;
+using ReadQualQuad = ReadQualSet<4>;
+
+// Helper to unpack indices
+template <typename F, size_t... Is>
+void apply_indices_impl(std::index_sequence<Is...>, F&& f) {
+  f(std::integral_constant<size_t, Is>{}...);
+}
+
+template <size_t N, typename F> void apply_indices(F&& f) {
+  apply_indices_impl(std::make_index_sequence<N>{}, std::forward<F>(f));
+}
 
 struct FileGroup {
   std::vector<std::string> files;

@@ -47,8 +47,8 @@ int main(int argc, char* argv[]) {
           for (auto& seqPair : rg) {
             ++lctr;
 
-            auto& seq = seqPair.first;
-            auto& seq2 = seqPair.second;
+            auto& seq = seqPair.first();
+            auto& seq2 = seqPair.second();
 
             size_t j = 0;
             //for (size_t j = 0; j < seq.seq.length(); ++j) {

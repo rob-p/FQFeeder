@@ -32,11 +32,11 @@ set (CMAKE_CXX_FLAGS "-fPIC -pthread -O3 -DHAVE_ANSI_TERM -DHAVE_SSTREAM -Wall -
 if ("${CMAKE_SYSTEM_NAME}" MATCHES "Darwin")
     # To allow ourselves to build a dynamic library, we have to tell the compiler
     # that, yes, the symbols will be around at runtime.
-    set (CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -undefined dynamic_lookup")
-    set (LINKER_FLAGS "-all_load")
+    #set (CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -undefined dynamic_lookup")
+    #set (LINKER_FLAGS "-all_load")
     # In order to "think different", we also have to use non-standard suffixes
     # for our shared libraries
-    set(SHARED_LIB_EXTENSION "dylib")
+    #set(SHARED_LIB_EXTENSION "dylib")
 else()
     # We're in sane linux world
     set (SHARED_LIB_EXTENSION "so")

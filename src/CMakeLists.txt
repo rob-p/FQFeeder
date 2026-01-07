@@ -2,7 +2,7 @@ set(TEST_SRCS TestReader.cpp)
 
 set(FQFEEDER_LIB_SRCS FastxParser.cpp)
 
-add_library(fqfeeder ${FQFEEDER_LIB_SRCS})
+add_library(fqfeeder STATIC ${FQFEEDER_LIB_SRCS})
 
 include_directories(
 ${TOP_LEVEL_DIR}/include
