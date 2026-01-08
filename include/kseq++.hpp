@@ -29,8 +29,6 @@
 #include <mutex>
 #include <condition_variable>
 
-#include "config.hpp"
-
 namespace klibpp {
   template< typename TFile,
             typename TFunc,

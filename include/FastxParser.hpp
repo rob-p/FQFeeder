@@ -257,19 +257,6 @@ private:
 
 template <typename T> class FastxParser {
 public:
-  FastxParser(std::vector<std::string> files, uint32_t numConsumers,
-              uint32_t numParsers = 1, uint32_t chunkSize = 1000);
-
-  FastxParser(std::vector<std::string> files, std::vector<std::string> files2,
-              uint32_t numConsumers, uint32_t numParsers = 1,
-              uint32_t chunkSize = 1000, bool parallelParsing = true);
-
-  // Triplet constructor for protocols with 3 synchronized files
-  FastxParser(std::vector<std::string> files, std::vector<std::string> files2,
-              std::vector<std::string> files3, uint32_t numConsumers,
-              uint32_t numParsers = 1, uint32_t chunkSize = 1000,
-              bool parallelParsing = true);
-
   template <typename... FileVectors>
   FastxParser(fastx_parser::ParserConfig& c, FileVectors&&... fileVectors)
       : inputStreamSets_{std::forward<FileVectors>(fileVectors)...},
