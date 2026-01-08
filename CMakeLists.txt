@@ -101,6 +101,7 @@ endif()
 
 # Recurse into source directory
 add_subdirectory (src)
+add_subdirectory (examples)
 
 # build a CPack driven installer package
 include (CPack)

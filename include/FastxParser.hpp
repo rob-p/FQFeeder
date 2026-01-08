@@ -165,7 +165,7 @@ template <> struct ReadTrait<klibpp::KSeq> {
 };
 
 // Type aliases for convenience and backward compatibility
-using ReadSeq = klibpp::KSeq;
+using ReadSeq = ReadSet<1>;//klibpp::KSeq;
 using ReadPair = ReadSet<2>;
 using ReadTriple = ReadSet<3>;
 /*
@@ -292,13 +292,22 @@ public:
     }
 
     // Adjust numParsers if needed
-    if (c.numParsers > numFiles) {
+    if (!parallelParsing_ && c.numParsers > numFiles) {
+      auto limit = numFiles;
       std::cerr
-          << "[INFO]: Can't make use of more parsing threads than file sets; "
+          << "[INFO]: In serial-within-set mode, can't make use of more parsing threads than file sets (" << limit << "); "
              "setting # of parsing threads to "
-          << numFiles << '\n';
-      c.numParsers = numFiles;
+          << limit << '\n';
+      c.numParsers = limit;
+    } else if (parallelParsing_ && c.numParsers > (numFiles + 1) * arity) {
+      auto limit = (numFiles + 1) * arity;
+      std::cerr
+          << "[INFO]: In parallel-within-set mode, can't make use of more parsing threads than arity (" << arity << " + 1) * file sets (" << numFiles << "); "
+             "setting # of parsing threads to "
+          << limit << '\n';
+      c.numParsers = limit;
     }
+
     numParsers_ = c.numParsers;
     numParsing_ = 0;
 
