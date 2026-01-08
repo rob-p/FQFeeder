@@ -23,7 +23,7 @@ struct ParserConfig {
   uint32_t numConsumers{1};
   uint32_t numParsers{1};
   uint32_t chunkSize{1000};
-  bool parallelParsing{true};
+  bool parallelParsing{false};
 
   static ParserConfig with_consumers_single(uint32_t numConsumers) {
     return {numConsumers, 1, 1000, false};
