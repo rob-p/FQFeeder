@@ -15,6 +15,7 @@
 #include <zlib.h>
 
 namespace fastx_parser {
+
 // ============================================================================
 // Parallel parsing functions for multi-file modes
 // ============================================================================
@@ -30,7 +31,6 @@ int parse_single_file(
         recycleQueue,
     uint32_t chunkSize = 1000) {
   using namespace klibpp;
-  using fastx_parser::thread_utils::MIN_BACKOFF_ITERS;
 
   gzFile fp = gzopen(filename.c_str(), "r");
   if (!fp) {
@@ -42,7 +42,7 @@ int parse_single_file(
   auto seq = make_kstream(fp, gzread, mode::in);
   uint32_t recordsInChunk = 0;
 
-  // Helper to allocate or recycle a chunk
+  // helper to allocate or recycle a chunk
   auto get_chunk = [&](size_t size) {
     std::unique_ptr<ReadChunk<SingleReadT>> chunk;
     if (recycleQueue.try_dequeue(chunk)) {
@@ -52,18 +52,19 @@ int parse_single_file(
     return std::make_unique<ReadChunk<SingleReadT>>(size);
   };
 
-  // Allocate initial chunk
+  // allocate initial chunk
   auto currentChunk = get_chunk(chunkSize);
 
   while (seq >> (*currentChunk)[recordsInChunk]) {
     recordsInChunk++;
     if (recordsInChunk == chunkSize) {
       currentChunk->have(recordsInChunk);
-      size_t curMaxDelay = MIN_BACKOFF_ITERS;
-      while (!outputQueue.try_enqueue(std::move(currentChunk))) {
-        fastx_parser::thread_utils::backoffOrYield(curMaxDelay);
-      }
-      // Allocate next chunk
+
+      thread_utils::simple_wait([&]() { 
+        return outputQueue.try_enqueue(std::move(currentChunk));
+      });
+
+      // allocate next chunk
       currentChunk = get_chunk(chunkSize);
       recordsInChunk = 0;
     }
@@ -76,20 +77,18 @@ int parse_single_file(
     result = -2;
   }
 
-  // Flush remaining read in last chunk
+  // flush remaining read in last chunk
   if (recordsInChunk > 0) {
     currentChunk->have(recordsInChunk);
-    size_t curMaxDelay = MIN_BACKOFF_ITERS;
-    while (!outputQueue.try_enqueue(std::move(currentChunk))) {
-      fastx_parser::thread_utils::backoffOrYield(curMaxDelay);
-    }
+    thread_utils::simple_wait([&]() { 
+      return outputQueue.try_enqueue(std::move(currentChunk));
+    });
   }
 
   // Signal end-of-file with nullptr
-  size_t curMaxDelay = MIN_BACKOFF_ITERS;
-  while (!outputQueue.try_enqueue(nullptr)) {
-    fastx_parser::thread_utils::backoffOrYield(curMaxDelay);
-  }
+  thread_utils::simple_wait([&]() { 
+      return outputQueue.try_enqueue(nullptr);
+  });
 
   gzclose(fp);
   parsingDone = true;

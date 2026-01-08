@@ -52,7 +52,7 @@ ALWAYS_INLINE static void cpuRelax() {
 
 ALWAYS_INLINE void yieldSleep() {
   using namespace std::chrono;
-  std::chrono::microseconds ytime(500);
+  std::chrono::microseconds ytime(100);
   std::this_thread::sleep_for(ytime);
 }
 
@@ -83,7 +83,29 @@ ALWAYS_INLINE void backoffOrYield(size_t& curMaxDelay) {
   backoffExp(curMaxDelay);
 }
 
-// Generic assembler for N-way read sets
+// Dead simple - inline everything
+template<typename Func>
+ALWAYS_INLINE void simple_wait(Func&& try_op) {
+    auto curMaxDelay = MIN_BACKOFF_ITERS;
+    while(!try_op()) {
+      backoffOrYield(curMaxDelay);
+    }
+    return;
+    /*
+    // Try a few times with just a pause
+    for (int i = 0; i < 32; ++i) {
+        if (try_op()) return;
+        cpuRelax();
+    }
+    
+    // If that didn't work, yield to scheduler
+    // (this is likely I/O bound, not contention)
+    while (!try_op()) {
+        std::this_thread::yield();
+    }
+    */
+}
+
 template <typename T, size_t N>
 int assemble_read_set(
     std::array<std::shared_ptr<moodycamel::ConcurrentQueue<
@@ -99,50 +121,21 @@ int assemble_read_set(
     std::atomic<uint32_t>& numParsing) {  // Changed from numAssembling
 
   std::array<std::unique_ptr<ReadChunk<klibpp::KSeq>>, N> chunks;
-  alignas(64) std::array<size_t, N> indices{};
-  alignas(64) std::array<bool, N> fileDone{};
+  std::array<size_t, N> indices{};
+  std::array<bool, N> fileDone{};
   
-  //std::cerr << "[Thread " << std::this_thread::get_id() << "] Assembler for file " 
-  //        << file_idx << " started (" << N << "-way)\n" << std::flush;
-  
-  //std::cerr << "[ASSEM] Step 1: Arrays created\n" << std::flush;
-  
-  // Get initial output chunk
+  // get initial output chunk
   std::unique_ptr<ReadChunk<T>> local;
-  
-  //std::cerr << "[ASSEM] Step 2: About to get initial chunk from seqContainerQueue\n" << std::flush;
-  
-  size_t curMaxDelay = MIN_BACKOFF_ITERS;
-  
-  //std::cerr << "[ASSEM] Step 3: About to try_dequeue, cCont=" << cCont << "\n" << std::flush;
-  
-  // Try without token first to debug
+   
   bool got_chunk = seqContainerQueue.try_dequeue(*cCont, local);
-  
-  //std::cerr << "[ASSEM] Step 4: try_dequeue returned " << got_chunk << "\n" << std::flush;
-  
   if (!got_chunk) {
-    //std::cerr << "[ASSEM] Step 5: Entering wait loop\n" << std::flush;
-    while (!seqContainerQueue.try_dequeue(*cCont, local)) {
-      backoffOrYield(curMaxDelay);
-    }
-    //std::cerr << "[ASSEM] Step 6: Got chunk after waiting\n" << std::flush;
+    thread_utils::simple_wait([&]() { 
+      return seqContainerQueue.try_dequeue(*cCont, local);
+    });
   }
-  
-  //std::cerr << "[ASSEM] Step 7: Got initial output chunk, size=" << local->size() << "\n" << std::flush;
-  
-  /*
-  std::cerr << "[ASSEM] Checking queues array:\n" << std::flush;
-  for (size_t i = 0; i < N; ++i) {
-    std::cerr << "[ASSEM]   queues[" << i << "] = " << queues[i].get() << "\n" << std::flush;
-    std::cerr << "[ASSEM]   recycleQueues[" << i << "] = " << recycleQueues[i].get() << "\n" << std::flush;
-    std::cerr << "[ASSEM]   doneFlags[" << i << "] = " << doneFlags[i].get() << "\n" << std::flush;
-  }
-  */
   
   size_t numObtained = local->size();
   size_t numWaiting = 0;
-  uint64_t gathered_count = 0;
 
   // Lambda to fetch chunk from a specific queue
   auto fetch_chunk = [&](size_t idx) -> bool {
@@ -186,7 +179,7 @@ int assemble_read_set(
     for (size_t i = 0; i < N; ++i) {
       haveData[i] = fetch_chunk(i);
     }
-    
+
     // Check if all queues have data
     bool allHaveData = true;
     for (size_t i = 0; i < N; ++i) {
@@ -195,7 +188,7 @@ int assemble_read_set(
         break;
       }
     }
-    
+
     if (allHaveData) {
       /*
        // Ensure that the ranks in each chunk match
@@ -216,61 +209,49 @@ int assemble_read_set(
       }
       ++numWaiting;
       ++gathered_count;
-      
-      /*
-      if (numWaiting % 100 == 0) {
-        std::cerr << "[Thread " << std::this_thread::get_id() << "] Assembled " 
-                  << numWaiting << " read sets\n" << std::flush;
-      }
-      */
 
       if (numWaiting == numObtained) {
         local->have(numWaiting);
         local->set_chunk_frag_offset(file_idx, gathered_count - numWaiting);
-        
-        curMaxDelay = MIN_BACKOFF_ITERS;
-        while (!readQueue.try_enqueue(*pRead, std::move(local))) {
-          backoffOrYield(curMaxDelay);
-        }
 
-        // Get next output chunk
+        thread_utils::simple_wait([&]() { 
+          return readQueue.try_enqueue(*pRead, std::move(local));
+        });
+
+        // get next output chunk
         numWaiting = 0;
-        curMaxDelay = MIN_BACKOFF_ITERS;
-        while (!seqContainerQueue.try_dequeue(*cCont, local)) {
-          backoffOrYield(curMaxDelay);
-        }
+
+        thread_utils::simple_wait([&]() { 
+          return seqContainerQueue.try_dequeue(*cCont, local);
+        });
         numObtained = local->size();
       }
     } else {
-      // Not all queues have data, but check if we're done before backing off
+      // not all queues have data, but check if we're done before backing off
       if (all_done()) {
         break;
       }
-      size_t kBackoff = MIN_BACKOFF_ITERS;
-      backoffOrYield(kBackoff);
     }
+
   }
 
-  // Flush remaining
+  // flush remaining
   if (numWaiting > 0) {
     local->have(numWaiting);
     local->set_chunk_frag_offset(file_idx, gathered_count - numWaiting);
-    curMaxDelay = MIN_BACKOFF_ITERS;
-    while (!readQueue.try_enqueue(*pRead, std::move(local))) {
-      backoffOrYield(curMaxDelay);
-    }
+
+    thread_utils::simple_wait([&]() { 
+      return readQueue.try_enqueue(*pRead, std::move(local));
+    });
   } else {
-    curMaxDelay = MIN_BACKOFF_ITERS;
-    while (!seqContainerQueue.try_enqueue(std::move(local))) {
-      backoffOrYield(curMaxDelay);
-    }
+    thread_utils::simple_wait([&]() { 
+      return seqContainerQueue.try_enqueue(std::move(local));
+    });
+
+    /*
   }
 
   --numParsing;  // Changed from numAssembling
-  /*
-  std::cerr << "[Thread " << std::this_thread::get_id() << "] Assembler for file " 
-            << file_idx << " finished, numParsing=" << numParsing.load() << "\n" << std::flush;
-  */
   return 0;
 }
 
