@@ -14,4 +14,3 @@ add_executable(test_parser_triplet TestTriplet.cpp)
 
 target_link_libraries(test_parser pthread fqfeeder zlib-ng::zlib-ng)
 target_link_libraries(test_kseq pthread zlib-ng::zlib-ng)
-target_link_libraries(test_parser_triplet pthread fqfeeder zlib-ng::zlib-ng)

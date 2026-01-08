@@ -123,6 +123,22 @@ template <size_t N> struct ReadSet {
   }
 };
 
+// Full specialization for N = 1
+template <> struct ReadSet<1> {
+  klibpp::KSeq read;
+  
+  klibpp::KSeq& operator[](size_t i) { return read; }
+  const klibpp::KSeq& operator[](size_t i) const { return read; }
+  
+  // Simplified accessors - no need for enable_if
+  klibpp::KSeq& first() { return read; }
+  const klibpp::KSeq& first() const { return read; }
+  
+  // You could also add a get() method for more intuitive single-element access
+  klibpp::KSeq& get() { return read; }
+  const klibpp::KSeq& get() const { return read; }
+};
+
 // Specialization of ReadTrait for ReadSet<N>
 template <size_t N> struct ReadTrait<ReadSet<N>> {
   static constexpr size_t arity = N;
