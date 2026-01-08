@@ -521,7 +521,7 @@ template <> bool FastxParser<ReadPair>::start() {
         ++numParsing_;
         parsingThreads_.emplace_back(new std::thread([this, i]() {
           this->threadResults_[i] = parse_read_pairs(
-              this->inputStreamSets_[0], this->inputStreamSets_[0],
+              this->inputStreamSets_[0], this->inputStreamSets_[1],
               this->numParsing_, this->consumeContainers_[i].get(),
               this->produceReads_[i].get(), this->workQueue_,
               this->seqContainerQueue_, this->readQueue_);

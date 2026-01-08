@@ -136,6 +136,7 @@ int assemble_read_set(
   
   size_t numObtained = local->size();
   size_t numWaiting = 0;
+  uint64_t gathered_count = 0;
 
   // Lambda to fetch chunk from a specific queue
   auto fetch_chunk = [&](size_t idx) -> bool {
@@ -247,8 +248,6 @@ int assemble_read_set(
     thread_utils::simple_wait([&]() { 
       return seqContainerQueue.try_enqueue(std::move(local));
     });
-
-    /*
   }
 
   --numParsing;  // Changed from numAssembling
