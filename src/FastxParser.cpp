@@ -258,10 +258,17 @@ int parse_reads(
   return 0;
 }
 
-template <typename T>
-int parse_read_pairs(
-    std::vector<std::string>& inputStreams,
-    std::vector<std::string>& inputStreams2, std::atomic<uint32_t>& numParsing,
+template <size_t N, size_t... Is>
+auto make_kstream_array(
+    const std::array<gzFile, N>& fptrs,
+    std::index_sequence<Is...>) {
+  return std::array{klibpp::make_kstream(fptrs[Is], gzread, klibpp::mode::in)...};
+}
+
+template <typename T, size_t N>
+int parse_read_set_serial(
+    std::vector<std::vector<std::string>>& inputStreams,
+    std::atomic<uint32_t>& numParsing,
     moodycamel::ConsumerToken* cCont, moodycamel::ProducerToken* pRead,
     moodycamel::ConcurrentQueue<uint32_t>& workQueue,
     moodycamel::ConcurrentQueue<std::unique_ptr<ReadChunk<T>>>&
@@ -270,27 +277,29 @@ int parse_read_pairs(
 
   using namespace klibpp;
   using fastx_parser::thread_utils::MIN_BACKOFF_ITERS;
-  size_t curMaxDelay = MIN_BACKOFF_ITERS;
   T* s;
 
   uint32_t fn{0};
   while (workQueue.try_dequeue(fn)) {
     // for (size_t fn = 0; fn < inputStreams.size(); ++fn) {
-    auto& file = inputStreams[fn];
-    auto& file2 = inputStreams2[fn];
+    //auto& file = inputStreams[fn];
+    //auto& file2 = inputStreams2[fn];
 
     std::unique_ptr<ReadChunk<T>> local;
-    while (!seqContainerQueue_.try_dequeue(*cCont, local)) {
-      fastx_parser::thread_utils::backoffOrYield(curMaxDelay);
-      // Think of a way to do this that wouldn't be loud (or would allow a
-      // user-definable logging mechanism) std::cerr << "couldn't dequeue read
-      // chunk\n";
-    }
+    thread_utils::simple_wait([&]() { 
+      return seqContainerQueue_.try_dequeue(*cCont, local);
+    });
     size_t numObtained{local->size()};
 
     // open the file and init the parser
+    std::array<gzFile, N> fptrs{};
+    for (size_t i = 0; i < N; ++i){
+      fptrs[i] = gzopen(inputStreams[i][fn].c_str(), "r");
+    }
+    /*
     gzFile fp = gzopen(file.c_str(), "r");
     gzFile fp2 = gzopen(file2.c_str(), "r");
+    */
 
     // we start off with the 0-th fragment in this
     // file.
@@ -300,39 +309,55 @@ int parse_read_pairs(
     // The number of reads we have in the local vector
     size_t numWaiting{0};
 
-    auto seq = make_kstream(fp, gzread, mode::in);
-    auto seq2 = make_kstream(fp2, gzread, mode::in);
+    auto seqs = make_kstream_array(fptrs, std::make_index_sequence<N>{});
+
+    auto get_seqs_from_files = [&](T* s) -> bool {
+      for (size_t i = 0; i < N; ++i) {
+        if (!(seqs[i] >> (*s)[i])) { return false; }
+      }
+      return true;
+    };
 
     s = &((*local)[numWaiting]);
-    while ((seq >> s->first()) and
-           (seq2 >> s->second())) { // ksv >= 0 and ksv2 >= 0) {
+    while ( get_seqs_from_files(s) ) { // ksv >= 0 and ksv2 >= 0) {
       frag_id++;
       numWaiting++;
       // If we've filled the local vector, then dump to the concurrent queue
       if (numWaiting == numObtained) {
-        curMaxDelay = MIN_BACKOFF_ITERS;
         local->set_chunk_frag_offset(fn, first_frag_of_chunk);
-        while (!readQueue_.try_enqueue(std::move(local))) {
-          fastx_parser::thread_utils::backoffOrYield(curMaxDelay);
-        }
+
+        thread_utils::simple_wait([&]() { 
+          return readQueue_.try_enqueue(std::move(local));
+        });
+
         first_frag_of_chunk = frag_id;
         numWaiting = 0;
         numObtained = 0;
         // And get more empty reads
-        curMaxDelay = MIN_BACKOFF_ITERS;
-        while (!seqContainerQueue_.try_dequeue(*cCont, local)) {
-          fastx_parser::thread_utils::backoffOrYield(curMaxDelay);
-        }
+        thread_utils::simple_wait([&]() { 
+          return seqContainerQueue_.try_dequeue(*cCont, local);
+        });
         numObtained = local->size();
       }
       s = &((*local)[numWaiting]);
     }
 
     // if we had an error in the stream
-    if (seq.err() or seq2.err()) {
+    bool had_err = false;
+    for (size_t i = 0; i < N; ++i) {
+      had_err = had_err || seqs[i].err();
+      if (had_err) { break; }
+    }
+    bool had_tqs = false;
+    for (size_t i = 0; i < N; ++i) {
+      had_tqs = had_tqs || seqs[i].tqs();
+      if (had_tqs) { break; }
+    }
+
+    if (had_err) {
       --numParsing;
       return -3;
-    } else if (seq.tqs() or seq2.tqs()) {
+    } else if (had_tqs) {
       // if we had a quality string of the wrong length
       // tqs == truncated quality string
       --numParsing;
@@ -344,21 +369,22 @@ int parse_read_pairs(
     if (numWaiting > 0) {
       local->have(numWaiting);
       local->set_chunk_frag_offset(fn, first_frag_of_chunk);
-      curMaxDelay = MIN_BACKOFF_ITERS;
-      while (!readQueue_.try_enqueue(*pRead, std::move(local))) {
-        fastx_parser::thread_utils::backoffOrYield(curMaxDelay);
-      }
+
+      thread_utils::simple_wait([&]() { 
+        return readQueue_.try_enqueue(*pRead, std::move(local));
+      });
+
       numWaiting = 0;
     } else if (numObtained > 0) {
-      curMaxDelay = MIN_BACKOFF_ITERS;
       local->set_chunk_frag_offset(fn, first_frag_of_chunk);
-      while (!seqContainerQueue_.try_enqueue(std::move(local))) {
-        fastx_parser::thread_utils::backoffOrYield(curMaxDelay);
-      }
+      thread_utils::simple_wait([&]() { 
+        return seqContainerQueue_.try_enqueue(std::move(local));
+      });
     }
     // destroy the parser and close the file
-    gzclose(fp);
-    gzclose(fp2);
+    for (size_t i = 0; i < N; ++i) {
+      gzclose(fptrs[i]);
+    }
   }
 
   --numParsing;
@@ -520,8 +546,8 @@ template <> bool FastxParser<ReadPair>::start() {
       for (size_t i = 0; i < numParsers_; ++i) {
         ++numParsing_;
         parsingThreads_.emplace_back(new std::thread([this, i]() {
-          this->threadResults_[i] = parse_read_pairs(
-              this->inputStreamSets_[0], this->inputStreamSets_[1],
+          this->threadResults_[i] = parse_read_set_serial<ReadPair, 2>(
+              this->inputStreamSets_,
               this->numParsing_, this->consumeContainers_[i].get(),
               this->produceReads_[i].get(), this->workQueue_,
               this->seqContainerQueue_, this->readQueue_);
@@ -546,8 +572,8 @@ template <> bool FastxParser<ReadQualPair>::start() {
       for (size_t i = 0; i < numParsers_; ++i) {
         ++numParsing_;
         parsingThreads_.emplace_back(new std::thread([this, i]() {
-          this->threadResults_[i] = parse_read_pairs(
-              this->inputStreamSets_[0], this->inputStreamSets_[1],
+          this->threadResults_[i] = parse_read_set_serial<ReadQualPair, 2>(
+              this->inputStreamSets_,
               this->numParsing_, this->consumeContainers_[i].get(),
               this->produceReads_[i].get(), this->workQueue_,
               this->seqContainerQueue_, this->readQueue_);
@@ -560,11 +586,55 @@ template <> bool FastxParser<ReadQualPair>::start() {
 }
 
 template <> bool FastxParser<ReadTriple>::start() {
-  return start_parallel_parsing_impl<3>();
+  if (parallelParsing_ && inputStreamSets_.size() > 0) {
+    return start_parallel_parsing_impl<3>();
+  } else {
+    // Fall back to sequential
+    if (numParsing_ == 0) {
+      isActive_ = true;
+      threadResults_.resize(numParsers_);
+      std::fill(threadResults_.begin(), threadResults_.end(), 0);
+
+      for (size_t i = 0; i < numParsers_; ++i) {
+        ++numParsing_;
+        parsingThreads_.emplace_back(new std::thread([this, i]() {
+          this->threadResults_[i] = parse_read_set_serial<ReadTriple, 3>(
+              this->inputStreamSets_,
+              this->numParsing_, this->consumeContainers_[i].get(),
+              this->produceReads_[i].get(), this->workQueue_,
+              this->seqContainerQueue_, this->readQueue_);
+        }));
+      }
+      return true;
+    }
+    return false;
+  }
 }
 
 template <> bool FastxParser<ReadQualTriple>::start() {
-  return start_parallel_parsing_impl<3>();
+  if (parallelParsing_ && inputStreamSets_.size() > 0) {
+    return start_parallel_parsing_impl<3>();
+  } else {
+    // Fall back to sequential
+    if (numParsing_ == 0) {
+      isActive_ = true;
+      threadResults_.resize(numParsers_);
+      std::fill(threadResults_.begin(), threadResults_.end(), 0);
+
+      for (size_t i = 0; i < numParsers_; ++i) {
+        ++numParsing_;
+        parsingThreads_.emplace_back(new std::thread([this, i]() {
+          this->threadResults_[i] = parse_read_set_serial<ReadQualTriple, 3>(
+            this->inputStreamSets_,
+            this->numParsing_, this->consumeContainers_[i].get(),
+            this->produceReads_[i].get(), this->workQueue_,
+            this->seqContainerQueue_, this->readQueue_);
+        }));
+      }
+      return true;
+    }
+    return false;
+  }
 }
 
 template <typename T> bool FastxParser<T>::refill(ReadGroup<T>& seqs) {
