@@ -348,7 +348,7 @@ private:
   std::vector<std::vector<std::string>> inputStreamSets_;
 
   uint32_t numParsers_;
-  std::atomic<uint32_t> numParsing_;
+  alignas(64) std::atomic<uint32_t> numParsing_;
   bool parallelParsing_{true}; // Enable parallel parsing for multi-file modes
 
   // NOTE: Would like to use std::future<int> here instead, but that

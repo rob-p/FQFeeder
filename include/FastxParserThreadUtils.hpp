@@ -99,8 +99,8 @@ int assemble_read_set(
     std::atomic<uint32_t>& numParsing) {  // Changed from numAssembling
 
   std::array<std::unique_ptr<ReadChunk<klibpp::KSeq>>, N> chunks;
-  std::array<size_t, N> indices{};
-  std::array<bool, N> fileDone{};
+  alignas(64) std::array<size_t, N> indices{};
+  alignas(64) std::array<bool, N> fileDone{};
   
   //std::cerr << "[Thread " << std::this_thread::get_id() << "] Assembler for file " 
   //        << file_idx << " started (" << N << "-way)\n" << std::flush;
