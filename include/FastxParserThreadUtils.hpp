@@ -197,6 +197,18 @@ int assemble_read_set(
     }
     
     if (allHaveData) {
+      /*
+       // Ensure that the ranks in each chunk match
+      size_t first_rank = std::numeric_limits<size_t>::max();
+      for (size_t i = 0; i < N; ++i) {
+        if (first_rank == std::numeric_limits<size_t>::max()) {
+          first_rank = chunks[i]->chunk_frag_offset().frag_idx;
+        }
+        if (chunks[i]->chunk_frag_offset().frag_idx != first_rank) {
+          std::cerr << "[ERROR]: Rank of first chunk in this set was " << first_rank << ", but part " << i << " has rank " << chunks[i]->chunk_frag_offset().frag_idx << "\n";
+        }
+      }
+      */
       // Assemble N-tuple
       T& readSet = (*local)[numWaiting];
       for (size_t i = 0; i < N; ++i) {
