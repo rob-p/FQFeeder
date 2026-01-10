@@ -34,7 +34,11 @@ int parse_single_file(
 
   gzFile fp = gzopen(filename.c_str(), "r");
   if (!fp) {
-    parsingDone = true;
+    // Signal end-of-file with nullptr
+    thread_utils::simple_wait([&]() { 
+      return outputQueue.try_enqueue(nullptr);
+    });
+    //parsingDone = true;
     //--numParsing;
     return -4;
   }
@@ -91,7 +95,7 @@ int parse_single_file(
   });
 
   gzclose(fp);
-  parsingDone = true;
+  //parsingDone = true;
   //--numParsing;
   return result;
 }
