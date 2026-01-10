@@ -127,8 +127,8 @@ template <size_t N> struct ReadSet {
 template <> struct ReadSet<1> {
   klibpp::KSeq read;
   
-  klibpp::KSeq& operator[](size_t i) { return read; }
-  const klibpp::KSeq& operator[](size_t i) const { return read; }
+  klibpp::KSeq& operator[](size_t i) { (void)i; return read; }
+  const klibpp::KSeq& operator[](size_t i) const { (void)i; return read; }
   
   // Simplified accessors - no need for enable_if
   klibpp::KSeq& first() { return read; }
