@@ -34,8 +34,8 @@ int parse_single_file(
 
   gzFile fp = gzopen(filename.c_str(), "r");
   if (!fp) {
-    parsingDone = true;
-    --numParsing;
+    //parsingDone = true;
+    //--numParsing;
     return -4;
   }
 
@@ -91,8 +91,8 @@ int parse_single_file(
   });
 
   gzclose(fp);
-  parsingDone = true;
-  --numParsing;
+  //parsingDone = true;
+  //--numParsing;
   return result;
 }
 
@@ -391,31 +391,17 @@ int parse_read_set_serial(
 template <typename T>
 template <size_t N>
 bool FastxParser<T>::start_parallel_parsing_impl() {
-
+  
   if (numParsing_ != 0) {
     return false;
   }
 
   isActive_ = true;
 
-  // Validate using inputStreamSets_ directly
   size_t numFiles = inputStreamSets_[0].size();
-
-  // Static assert to ensure we have the right arity
-  static_assert(N == ReadTrait<T>::arity,
-                "Template parameter N must match read type arity");
-
+  
   if (inputStreamSets_.size() != N) {
-    throw std::logic_error(
-        "inputStreamSets_ size doesn't match template arity");
-  }
-
-  // Validate all file vectors have matching sizes
-  for (size_t i = 1; i < N; ++i) {
-    if (inputStreamSets_[i].size() != numFiles) {
-      throw std::invalid_argument(
-          "All file vectors must have the same number of files");
-    }
+    throw std::logic_error("inputStreamSets_ size doesn't match template arity");
   }
 
   if (!parallelParsing_) {
@@ -423,64 +409,91 @@ bool FastxParser<T>::start_parallel_parsing_impl() {
         "Multi-file parsing with arity > 1 requires parallelParsing=true");
   }
 
-  // N parsers + 1 assembler per file set
+  size_t numConcurrentFileSets = std::min(static_cast<size_t>(numParsers_), numFiles);
+  size_t totalThreads = numConcurrentFileSets * (N + 1);
+  
+  std::cerr << "Processing " << numFiles << " file sets with " 
+            << numConcurrentFileSets << " concurrent producers (" 
+            << totalThreads << " total threads)\n";
+
+  // HEAP-ALLOCATE the work queue so it outlives this function
+  auto fileWorkQueue = std::make_shared<moodycamel::ConcurrentQueue<uint32_t>>(numFiles);
+  for (size_t i = 0; i < numFiles; ++i) {
+    fileWorkQueue->enqueue(static_cast<uint32_t>(i));
+  }
+
   threadResults_.resize(numFiles * (N + 1));
   std::fill(threadResults_.begin(), threadResults_.end(), 0);
 
-  constexpr size_t local_chunk_size = 512;
 
-  for (size_t fn = 0; fn < numFiles; ++fn) {
-    // Create queues for this file set - HEAP-ALLOCATE the arrays themselves
-    auto queues = std::make_shared<
-        std::array<std::shared_ptr<moodycamel::ConcurrentQueue<
-                       std::unique_ptr<ReadChunk<klibpp::KSeq>>>>,
-                   N>>();
-    auto recycleQueues = std::make_shared<
-        std::array<std::shared_ptr<moodycamel::ConcurrentQueue<
-                       std::unique_ptr<ReadChunk<klibpp::KSeq>>>>,
-                   N>>();
-    auto doneFlags =
-        std::make_shared<std::array<std::shared_ptr<std::atomic<bool>>, N>>();
-
-    for (size_t i = 0; i < N; ++i) {
-      (*queues)[i] = std::make_shared<moodycamel::ConcurrentQueue<
-          std::unique_ptr<ReadChunk<klibpp::KSeq>>>>(local_chunk_size);
-      (*recycleQueues)[i] = std::make_shared<moodycamel::ConcurrentQueue<
-          std::unique_ptr<ReadChunk<klibpp::KSeq>>>>(local_chunk_size);
-      (*doneFlags)[i] = std::make_shared<std::atomic<bool>>(false);
-    }
-
-    // Launch N parser threads
-    for (size_t i = 0; i < N; ++i) {
-      ++numParsing_;
-      const std::string& filename = inputStreamSets_[i][fn];
-      parsingThreads_.emplace_back(new std::thread(
-          [this, fn, i, queue = (*queues)[i],
-           recycleQueue = (*recycleQueues)[i], done = (*doneFlags)[i],
-           filename]() { 
-            this->threadResults_[fn * (N + 1) + i] =
-                parse_single_file<klibpp::KSeq>(filename, fn, this->numParsing_,
-                                                *done, *queue, *recycleQueue,
-                                                this->blockSize_);
-          }));
-    }
-
-    // Launch assembler thread 
+  for (size_t producerIdx = 0; producerIdx < numConcurrentFileSets; ++producerIdx) {
     ++numParsing_;
-    size_t tokenIdx = fn % numParsers_;
-    parsingThreads_.emplace_back(new std::thread(
-        [this, fn, tokenIdx, queues, recycleQueues, doneFlags]() {
-          this->threadResults_[fn * (N + 1) + N] =
-              thread_utils::assemble_read_set<T, N>(
-                  *queues, *recycleQueues, *doneFlags,
-                  this->consumeContainers_[tokenIdx].get(),
-                  this->produceReads_[tokenIdx].get(), this->seqContainerQueue_,
-                  this->readQueue_, fn,
-                  this->numParsing_); // Pass numParsing_ for decrement
-        }));
+    
+    // Capture fileWorkQueue by VALUE (it's a shared_ptr, so the copy keeps the queue alive)
+    auto processFileSets = [this, fileWorkQueue, producerIdx]() {
+      constexpr size_t local_chunk_size = 512;
+      uint32_t fn{0};
+      while (fileWorkQueue->try_dequeue(fn)) {  // Note: -> instead of .
+        
+        std::cerr << "[Producer " << producerIdx << "] Processing file set " << fn << "\n";
+        
+        auto queues = std::make_shared<std::array<std::shared_ptr<moodycamel::ConcurrentQueue
+            <std::unique_ptr<ReadChunk<klibpp::KSeq>>>>, N>>();
+        auto recycleQueues = std::make_shared<std::array<std::shared_ptr<moodycamel::ConcurrentQueue
+            <std::unique_ptr<ReadChunk<klibpp::KSeq>>>>, N>>();
+        auto doneFlags = std::make_shared<std::array<std::shared_ptr<std::atomic<bool>>, N>>();
+
+        for (size_t i = 0; i < N; ++i) {
+          (*queues)[i] = std::make_shared<moodycamel::ConcurrentQueue
+              <std::unique_ptr<ReadChunk<klibpp::KSeq>>>>(local_chunk_size);
+          (*recycleQueues)[i] = std::make_shared<moodycamel::ConcurrentQueue
+              <std::unique_ptr<ReadChunk<klibpp::KSeq>>>>(local_chunk_size);
+          (*doneFlags)[i] = std::make_shared<std::atomic<bool>>(false);
+        }
+
+        std::vector<std::thread> parserThreads;
+        for (size_t i = 0; i < N; ++i) {
+          parserThreads.emplace_back(
+              [this, fn, i, queue = (*queues)[i], 
+               recycleQueue = (*recycleQueues)[i], 
+               done = (*doneFlags)[i]]() {
+                const std::string& filename = inputStreamSets_[i][fn];
+                this->threadResults_[fn * (N + 1) + i] = 
+                    parse_single_file<klibpp::KSeq>(
+                        filename, fn, this->numParsing_, *done, 
+                        *queue, *recycleQueue, this->blockSize_);
+              });
+        }
+
+        size_t tokenIdx = producerIdx;
+        std::thread assemblerThread(
+            [this, fn, tokenIdx, queues, recycleQueues, doneFlags]() {
+              this->threadResults_[fn * (N + 1) + N] = 
+                  thread_utils::assemble_read_set<T, N>(
+                      *queues, *recycleQueues, *doneFlags,
+                      this->consumeContainers_[tokenIdx].get(),
+                      this->produceReads_[tokenIdx].get(),
+                      this->seqContainerQueue_,
+                      this->readQueue_,
+                      fn);
+            });
+
+        for (auto& t : parserThreads) {
+          t.join();
+        }
+        assemblerThread.join();
+        
+        std::cerr << "[Producer " << producerIdx << "] Completed file set " << fn << "\n";
+      }
+      --numParsing_;
+    };
+
+    parsingThreads_.emplace_back(new std::thread(processFileSets));
   }
+
   return true;
 }
+
 
 template <> bool FastxParser<ReadSeq>::start() {
   if (numParsing_ == 0) {

@@ -117,8 +117,7 @@ int assemble_read_set(
     moodycamel::ProducerToken* pRead,
     moodycamel::ConcurrentQueue<std::unique_ptr<ReadChunk<T>>>& seqContainerQueue,
     moodycamel::ConcurrentQueue<std::unique_ptr<ReadChunk<T>>>& readQueue,
-    uint32_t file_idx,
-    std::atomic<uint32_t>& numParsing) {  // Changed from numAssembling
+    uint32_t file_idx) {  // Changed from numAssembling
 
   std::array<std::unique_ptr<ReadChunk<klibpp::KSeq>>, N> chunks;
   std::array<size_t, N> indices{};
@@ -250,7 +249,7 @@ int assemble_read_set(
     });
   }
 
-  --numParsing;  // Changed from numAssembling
+  //--numParsing;  // Changed from numAssembling
   return 0;
 }
 
