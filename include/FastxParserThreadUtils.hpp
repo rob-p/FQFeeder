@@ -112,7 +112,6 @@ int assemble_read_set(
         std::unique_ptr<ReadChunk<klibpp::KSeq>>>>, N>& queues,
     std::array<std::shared_ptr<moodycamel::ConcurrentQueue<
         std::unique_ptr<ReadChunk<klibpp::KSeq>>>>, N>& recycleQueues,
-    std::array<std::shared_ptr<std::atomic<bool>>, N>& doneFlags,
     moodycamel::ConsumerToken* cCont,
     moodycamel::ProducerToken* pRead,
     moodycamel::ConcurrentQueue<std::unique_ptr<ReadChunk<T>>>& seqContainerQueue,
@@ -167,7 +166,7 @@ int assemble_read_set(
   // Check if all files are done
   auto all_done = [&]() {
     for (size_t i = 0; i < N; ++i) {
-      if (!fileDone[i] || chunks[i] || !doneFlags[i])
+      if (!fileDone[i] || chunks[i])
         return false;
     }
     return true;
@@ -249,7 +248,6 @@ int assemble_read_set(
     });
   }
 
-  //--numParsing;  // Changed from numAssembling
   return 0;
 }
 

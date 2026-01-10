@@ -24,7 +24,6 @@ namespace fastx_parser {
 template <typename SingleReadT>
 int parse_single_file(
     const std::string& filename, uint32_t file_idx,
-    std::atomic<uint32_t>& numParsing, std::atomic<bool>& parsingDone,
     moodycamel::ConcurrentQueue<std::unique_ptr<ReadChunk<SingleReadT>>>&
         outputQueue,
     moodycamel::ConcurrentQueue<std::unique_ptr<ReadChunk<SingleReadT>>>&
@@ -38,8 +37,6 @@ int parse_single_file(
     thread_utils::simple_wait([&]() { 
       return outputQueue.try_enqueue(nullptr);
     });
-    //parsingDone = true;
-    //--numParsing;
     return -4;
   }
 
@@ -95,8 +92,6 @@ int parse_single_file(
   });
 
   gzclose(fp);
-  //parsingDone = true;
-  //--numParsing;
   return result;
 }
 
@@ -449,39 +444,32 @@ bool FastxParser<T>::start_parallel_parsing_impl() {
           <std::unique_ptr<ReadChunk<klibpp::KSeq>>>>(local_chunk_size);
         (*recycleQueues)[i] = std::make_shared<moodycamel::ConcurrentQueue
           <std::unique_ptr<ReadChunk<klibpp::KSeq>>>>(local_chunk_size);
-        (*doneFlags)[i] = std::make_shared<std::atomic<bool>>(false);
       }
 
       uint32_t fn{0};
       while (fileWorkQueue->try_dequeue(fn)) {  // Note: -> instead of .
         
-        std::cerr << "[Producer " << producerIdx << "] Processing file set " << fn << "\n";
+        //std::cerr << "[Producer " << producerIdx << "] Processing file set " << fn << "\n";
         
-        // Reset done flags for this file set
-        for (size_t i = 0; i < N; ++i) {
-          (*doneFlags)[i]->store(false);
-        }
-
         std::vector<std::thread> parserThreads;
         for (size_t i = 0; i < N; ++i) {
           parserThreads.emplace_back(
               [this, fn, i, queue = (*queues)[i], 
-               recycleQueue = (*recycleQueues)[i], 
-               done = (*doneFlags)[i]]() {
+               recycleQueue = (*recycleQueues)[i]]() {
                 const std::string& filename = inputStreamSets_[i][fn];
                 this->threadResults_[fn * (N + 1) + i] = 
                     parse_single_file<klibpp::KSeq>(
-                        filename, fn, this->numParsing_, *done, 
+                        filename, fn,  
                         *queue, *recycleQueue, this->blockSize_);
               });
         }
 
         size_t tokenIdx = producerIdx;
         std::thread assemblerThread(
-            [this, fn, tokenIdx, queues, recycleQueues, doneFlags]() {
+            [this, fn, tokenIdx, queues, recycleQueues]() {
               this->threadResults_[fn * (N + 1) + N] = 
                   thread_utils::assemble_read_set<T, N>(
-                      *queues, *recycleQueues, *doneFlags,
+                      *queues, *recycleQueues, 
                       this->consumeContainers_[tokenIdx].get(),
                       this->produceReads_[tokenIdx].get(),
                       this->seqContainerQueue_,
