@@ -411,10 +411,11 @@ bool FastxParser<T>::start_parallel_parsing_impl() {
   size_t numConcurrentFileSets = std::min(static_cast<size_t>(numParsers_), numFiles);
   size_t totalThreads = numConcurrentFileSets * (N + 1);
   
+  /*
   std::cerr << "Processing " << numFiles << " file sets with " 
             << numConcurrentFileSets << " concurrent producers (" 
             << totalThreads << " total threads)\n";
-
+  */
   // HEAP-ALLOCATE the work queue so it outlives this function
   auto fileWorkQueue = std::make_shared<moodycamel::ConcurrentQueue<uint32_t>>(numFiles);
   for (size_t i = 0; i < numFiles; ++i) {
