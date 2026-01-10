@@ -34,7 +34,7 @@ int parse_single_file(
 
   gzFile fp = gzopen(filename.c_str(), "r");
   if (!fp) {
-    //parsingDone = true;
+    parsingDone = true;
     //--numParsing;
     return -4;
   }
@@ -91,7 +91,7 @@ int parse_single_file(
   });
 
   gzclose(fp);
-  //parsingDone = true;
+  parsingDone = true;
   //--numParsing;
   return result;
 }
@@ -431,24 +431,31 @@ bool FastxParser<T>::start_parallel_parsing_impl() {
     
     // Capture fileWorkQueue by VALUE (it's a shared_ptr, so the copy keeps the queue alive)
     auto processFileSets = [this, fileWorkQueue, producerIdx]() {
+
       constexpr size_t local_chunk_size = 512;
+
+      auto queues = std::make_shared<std::array<std::shared_ptr<moodycamel::ConcurrentQueue
+        <std::unique_ptr<ReadChunk<klibpp::KSeq>>>>, N>>();
+      auto recycleQueues = std::make_shared<std::array<std::shared_ptr<moodycamel::ConcurrentQueue
+        <std::unique_ptr<ReadChunk<klibpp::KSeq>>>>, N>>();
+      auto doneFlags = std::make_shared<std::array<std::shared_ptr<std::atomic<bool>>, N>>();
+
+      for (size_t i = 0; i < N; ++i) {
+        (*queues)[i] = std::make_shared<moodycamel::ConcurrentQueue
+          <std::unique_ptr<ReadChunk<klibpp::KSeq>>>>(local_chunk_size);
+        (*recycleQueues)[i] = std::make_shared<moodycamel::ConcurrentQueue
+          <std::unique_ptr<ReadChunk<klibpp::KSeq>>>>(local_chunk_size);
+        (*doneFlags)[i] = std::make_shared<std::atomic<bool>>(false);
+      }
+
       uint32_t fn{0};
       while (fileWorkQueue->try_dequeue(fn)) {  // Note: -> instead of .
         
         std::cerr << "[Producer " << producerIdx << "] Processing file set " << fn << "\n";
         
-        auto queues = std::make_shared<std::array<std::shared_ptr<moodycamel::ConcurrentQueue
-            <std::unique_ptr<ReadChunk<klibpp::KSeq>>>>, N>>();
-        auto recycleQueues = std::make_shared<std::array<std::shared_ptr<moodycamel::ConcurrentQueue
-            <std::unique_ptr<ReadChunk<klibpp::KSeq>>>>, N>>();
-        auto doneFlags = std::make_shared<std::array<std::shared_ptr<std::atomic<bool>>, N>>();
-
+        // Reset done flags for this file set
         for (size_t i = 0; i < N; ++i) {
-          (*queues)[i] = std::make_shared<moodycamel::ConcurrentQueue
-              <std::unique_ptr<ReadChunk<klibpp::KSeq>>>>(local_chunk_size);
-          (*recycleQueues)[i] = std::make_shared<moodycamel::ConcurrentQueue
-              <std::unique_ptr<ReadChunk<klibpp::KSeq>>>>(local_chunk_size);
-          (*doneFlags)[i] = std::make_shared<std::atomic<bool>>(false);
+          (*doneFlags)[i]->store(false);
         }
 
         std::vector<std::thread> parserThreads;

@@ -167,7 +167,7 @@ int assemble_read_set(
   // Check if all files are done
   auto all_done = [&]() {
     for (size_t i = 0; i < N; ++i) {
-      if (!fileDone[i] || chunks[i])
+      if (!fileDone[i] || chunks[i] || !doneFlags[i])
         return false;
     }
     return true;
