@@ -1,0 +1,2 @@
+/usr/bin/ar qc libfqfeeder.a CMakeFiles/fqfeeder.dir/FastxParser.cpp.o
+/usr/bin/ranlib libfqfeeder.a

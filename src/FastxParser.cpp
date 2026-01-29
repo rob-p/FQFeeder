@@ -409,7 +409,7 @@ bool FastxParser<T>::start_parallel_parsing_impl() {
   }
 
   size_t numConcurrentFileSets = std::min(static_cast<size_t>(numParsers_), numFiles);
-  size_t totalThreads = numConcurrentFileSets * (N + 1);
+  // size_t totalThreads = numConcurrentFileSets * (N + 1);  // Not currently used
   
   /*
   std::cerr << "Processing " << numFiles << " file sets with " 
@@ -434,62 +434,131 @@ bool FastxParser<T>::start_parallel_parsing_impl() {
 
       constexpr size_t local_chunk_size = 4096;
 
-      auto queues = std::make_shared<std::array<std::shared_ptr<moodycamel::ConcurrentQueue
-        <std::unique_ptr<ReadChunk<klibpp::KSeq>>>>, N>>();
-      auto recycleQueues = std::make_shared<std::array<std::shared_ptr<moodycamel::ConcurrentQueue
-        <std::unique_ptr<ReadChunk<klibpp::KSeq>>>>, N>>();
-      auto doneFlags = std::make_shared<std::array<std::shared_ptr<std::atomic<bool>>, N>>();
+      // Allocate queues and recycle queues with simpler lifetime management
+      // Use unique_ptr instead of nested shared_ptr to reduce atomic operations
+      struct FileSetContext {
+        std::array<moodycamel::ConcurrentQueue<std::unique_ptr<ReadChunk<klibpp::KSeq>>>, N> queues;
+        std::array<moodycamel::ConcurrentQueue<std::unique_ptr<ReadChunk<klibpp::KSeq>>>, N> recycleQueues;
+        
+        FileSetContext() {
+          for (size_t i = 0; i < N; ++i) {
+            // Queues are constructed in-place
+            new (&queues[i]) moodycamel::ConcurrentQueue<std::unique_ptr<ReadChunk<klibpp::KSeq>>>(local_chunk_size);
+            new (&recycleQueues[i]) moodycamel::ConcurrentQueue<std::unique_ptr<ReadChunk<klibpp::KSeq>>>(local_chunk_size);
+          }
+        }
+      };
+      
+      auto ctx = std::make_unique<FileSetContext>();
 
       for (size_t i = 0; i < N; ++i) {
-        (*queues)[i] = std::make_shared<moodycamel::ConcurrentQueue
-          <std::unique_ptr<ReadChunk<klibpp::KSeq>>>>(local_chunk_size);
-        (*recycleQueues)[i] = std::make_shared<moodycamel::ConcurrentQueue
-          <std::unique_ptr<ReadChunk<klibpp::KSeq>>>>(local_chunk_size);
-        
         // Pre-allocate chunks in recycle queue
         constexpr size_t NUM_PREALLOCATED = 4;
         for (size_t j = 0; j < NUM_PREALLOCATED; ++j) {
-          (*recycleQueues)[i]->enqueue(
+          ctx->recycleQueues[i].enqueue(
             std::make_unique<ReadChunk<klibpp::KSeq>>(this->blockSize_));
         }
       }
 
-      uint32_t fn{0};
-      while (fileWorkQueue->try_dequeue(fn)) {  // Note: -> instead of .
-        
-        //std::cerr << "[Producer " << producerIdx << "] Processing file set " << fn << "\n";
-        
-        std::vector<std::thread> parserThreads;
-        for (size_t i = 0; i < N; ++i) {
-          parserThreads.emplace_back(
-              [this, fn, i, queue = (*queues)[i], 
-               recycleQueue = (*recycleQueues)[i]]() {
-                const std::string& filename = inputStreamSets_[i][fn];
-                this->threadResults_[fn * (N + 1) + i] = 
+      // Create persistent parser worker threads (one per file in the arity)
+      // These threads will process multiple file sets
+      struct WorkItem {
+        uint32_t fileIdx;
+        bool done;
+      };
+      
+      std::array<moodycamel::ConcurrentQueue<WorkItem>, N> parserWorkQueues;
+      std::array<std::atomic<bool>, N> parserBusy;
+      for (size_t i = 0; i < N; ++i) {
+        parserBusy[i].store(false);
+      }
+      
+      std::vector<std::thread> parserThreads;
+      
+      for (size_t i = 0; i < N; ++i) {
+        parserThreads.emplace_back(
+            [this, i, &ctx, &parserWorkQueues, &parserBusy]() {
+              WorkItem work;
+              while (true) {
+                // Wait for work
+                thread_utils::simple_wait([&]() { 
+                  return parserWorkQueues[i].try_dequeue(work);
+                });
+                
+                if (work.done) {
+                  break; // Exit thread
+                }
+                
+                parserBusy[i].store(true);
+                const std::string& filename = inputStreamSets_[i][work.fileIdx];
+                this->threadResults_[work.fileIdx * (N + 1) + i] = 
                     parse_single_file<klibpp::KSeq>(
-                        filename, fn,  
-                        *queue, *recycleQueue, this->blockSize_);
-              });
-        }
+                        filename, work.fileIdx,  
+                        ctx->queues[i], ctx->recycleQueues[i], this->blockSize_);
+                parserBusy[i].store(false);
+              }
+            });
+      }
 
-        size_t tokenIdx = producerIdx;
-        std::thread assemblerThread(
-            [this, fn, tokenIdx, queues, recycleQueues]() {
-              this->threadResults_[fn * (N + 1) + N] = 
-                  thread_utils::assemble_read_set<T, N>(
-                      *queues, *recycleQueues, 
+      // Create persistent assembler thread
+      moodycamel::ConcurrentQueue<WorkItem> assemblerWorkQueue;
+      std::atomic<bool> assemblerBusy{false};
+      size_t tokenIdx = producerIdx;
+      std::thread assemblerThread(
+          [this, tokenIdx, &ctx, &assemblerWorkQueue, &assemblerBusy]() {
+            WorkItem work;
+            while (true) {
+              // Wait for work
+              thread_utils::simple_wait([&]() { 
+                return assemblerWorkQueue.try_dequeue(work);
+              });
+              
+              if (work.done) {
+                break; // Exit thread
+              }
+              
+              assemblerBusy.store(true);
+              this->threadResults_[work.fileIdx * (N + 1) + N] = 
+                  thread_utils::assemble_read_set_raw<T, N>(
+                      ctx->queues, ctx->recycleQueues,
                       this->consumeContainers_[tokenIdx].get(),
                       this->produceReads_[tokenIdx].get(),
                       this->seqContainerQueue_,
                       this->readQueue_,
-                      fn);
-            });
+                      work.fileIdx);
+              assemblerBusy.store(false);
+            }
+          });
 
-        for (auto& t : parserThreads) {
-          t.join();
+      // Process all file sets using persistent threads
+      uint32_t fn{0};
+      while (fileWorkQueue->try_dequeue(fn)) {
+        // Submit work to all parser threads
+        for (size_t i = 0; i < N; ++i) {
+          parserWorkQueues[i].enqueue(WorkItem{fn, false});
         }
-        assemblerThread.join();
+        
+        // Submit work to assembler thread
+        assemblerWorkQueue.enqueue(WorkItem{fn, false});
+        
+        // Wait for assembler to finish processing this file set
+        thread_utils::simple_wait([&]() { 
+          return !assemblerBusy.load();
+        });
       }
+
+      // Signal all threads to exit
+      for (size_t i = 0; i < N; ++i) {
+        parserWorkQueues[i].enqueue(WorkItem{0, true});
+      }
+      assemblerWorkQueue.enqueue(WorkItem{0, true});
+
+      // Join all persistent threads
+      for (auto& t : parserThreads) {
+        t.join();
+      }
+      assemblerThread.join();
+
       --numParsing_;
     };
 
