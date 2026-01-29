@@ -432,7 +432,7 @@ bool FastxParser<T>::start_parallel_parsing_impl() {
     // Capture fileWorkQueue by VALUE (it's a shared_ptr, so the copy keeps the queue alive)
     auto processFileSets = [this, fileWorkQueue, producerIdx]() {
 
-      constexpr size_t local_chunk_size = 512;
+      constexpr size_t local_chunk_size = 4096;
 
       auto queues = std::make_shared<std::array<std::shared_ptr<moodycamel::ConcurrentQueue
         <std::unique_ptr<ReadChunk<klibpp::KSeq>>>>, N>>();
@@ -445,6 +445,13 @@ bool FastxParser<T>::start_parallel_parsing_impl() {
           <std::unique_ptr<ReadChunk<klibpp::KSeq>>>>(local_chunk_size);
         (*recycleQueues)[i] = std::make_shared<moodycamel::ConcurrentQueue
           <std::unique_ptr<ReadChunk<klibpp::KSeq>>>>(local_chunk_size);
+        
+        // Pre-allocate chunks in recycle queue
+        constexpr size_t NUM_PREALLOCATED = 4;
+        for (size_t j = 0; j < NUM_PREALLOCATED; ++j) {
+          (*recycleQueues)[i]->enqueue(
+            std::make_unique<ReadChunk<klibpp::KSeq>>(this->blockSize_));
+        }
       }
 
       uint32_t fn{0};
@@ -482,8 +489,6 @@ bool FastxParser<T>::start_parallel_parsing_impl() {
           t.join();
         }
         assemblerThread.join();
-        
-        std::cerr << "[Producer " << producerIdx << "] Completed file set " << fn << "\n";
       }
       --numParsing_;
     };

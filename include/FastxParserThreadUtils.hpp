@@ -52,7 +52,7 @@ ALWAYS_INLINE static void cpuRelax() {
 
 ALWAYS_INLINE void yieldSleep() {
   using namespace std::chrono;
-  std::chrono::microseconds ytime(100);
+  std::chrono::microseconds ytime(20);
   std::this_thread::sleep_for(ytime);
 }
 
