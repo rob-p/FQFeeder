@@ -432,8 +432,6 @@ bool FastxParser<T>::start_parallel_parsing_impl() {
     // Capture fileWorkQueue by VALUE (it's a shared_ptr, so the copy keeps the queue alive)
     auto processFileSets = [this, fileWorkQueue, producerIdx]() {
 
-      constexpr size_t local_chunk_size = 4096;
-
       // Allocate queues and recycle queues with simpler lifetime management
       // Use unique_ptr instead of nested shared_ptr to reduce atomic operations
       struct FileSetContext {
@@ -441,11 +439,7 @@ bool FastxParser<T>::start_parallel_parsing_impl() {
         std::array<moodycamel::ConcurrentQueue<std::unique_ptr<ReadChunk<klibpp::KSeq>>>, N> recycleQueues;
         
         FileSetContext() {
-          for (size_t i = 0; i < N; ++i) {
-            // Queues are constructed in-place
-            new (&queues[i]) moodycamel::ConcurrentQueue<std::unique_ptr<ReadChunk<klibpp::KSeq>>>(local_chunk_size);
-            new (&recycleQueues[i]) moodycamel::ConcurrentQueue<std::unique_ptr<ReadChunk<klibpp::KSeq>>>(local_chunk_size);
-          }
+          // Queues are already default-constructed; no need for placement new
         }
       };
       
@@ -463,8 +457,8 @@ bool FastxParser<T>::start_parallel_parsing_impl() {
       // Create persistent parser worker threads (one per file in the arity)
       // These threads will process multiple file sets
       struct WorkItem {
-        uint32_t fileIdx;
-        bool done;
+        uint32_t fileIdx{0};
+        bool done{false};
       };
       
       std::array<moodycamel::ConcurrentQueue<WorkItem>, N> parserWorkQueues;
@@ -489,13 +483,13 @@ bool FastxParser<T>::start_parallel_parsing_impl() {
                   break; // Exit thread
                 }
                 
-                parserBusy[i].store(true);
+                parserBusy[i].store(true, std::memory_order_release);
                 const std::string& filename = inputStreamSets_[i][work.fileIdx];
                 this->threadResults_[work.fileIdx * (N + 1) + i] = 
                     parse_single_file<klibpp::KSeq>(
                         filename, work.fileIdx,  
                         ctx->queues[i], ctx->recycleQueues[i], this->blockSize_);
-                parserBusy[i].store(false);
+                parserBusy[i].store(false, std::memory_order_release);
               }
             });
       }
@@ -517,7 +511,7 @@ bool FastxParser<T>::start_parallel_parsing_impl() {
                 break; // Exit thread
               }
               
-              assemblerBusy.store(true);
+              assemblerBusy.store(true, std::memory_order_release);
               this->threadResults_[work.fileIdx * (N + 1) + N] = 
                   thread_utils::assemble_read_set_raw<T, N>(
                       ctx->queues, ctx->recycleQueues,
@@ -526,7 +520,7 @@ bool FastxParser<T>::start_parallel_parsing_impl() {
                       this->seqContainerQueue_,
                       this->readQueue_,
                       work.fileIdx);
-              assemblerBusy.store(false);
+              assemblerBusy.store(false, std::memory_order_release);
             }
           });
 
@@ -541,9 +535,19 @@ bool FastxParser<T>::start_parallel_parsing_impl() {
         // Submit work to assembler thread
         assemblerWorkQueue.enqueue(WorkItem{fn, false});
         
+        // Wait for all parser threads to complete
+        auto all_parsers_idle = [&]() {
+          for (size_t i = 0; i < N; ++i) {
+            if (parserBusy[i].load(std::memory_order_acquire)) {
+              return false;
+            }
+          }
+          return true;
+        };
+        
         // Wait for assembler to finish processing this file set
         thread_utils::simple_wait([&]() { 
-          return !assemblerBusy.load();
+          return !assemblerBusy.load(std::memory_order_acquire) && all_parsers_idle();
         });
       }
 
