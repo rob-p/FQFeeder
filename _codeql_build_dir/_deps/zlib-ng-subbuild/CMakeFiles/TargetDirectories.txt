@@ -1,0 +1,3 @@
+/home/runner/work/FQFeeder/FQFeeder/_codeql_build_dir/_deps/zlib-ng-subbuild/CMakeFiles/zlib-ng-populate.dir
+/home/runner/work/FQFeeder/FQFeeder/_codeql_build_dir/_deps/zlib-ng-subbuild/CMakeFiles/edit_cache.dir
+/home/runner/work/FQFeeder/FQFeeder/_codeql_build_dir/_deps/zlib-ng-subbuild/CMakeFiles/rebuild_cache.dir
