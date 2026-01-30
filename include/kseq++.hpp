@@ -452,10 +452,47 @@ namespace klibpp {
         constexpr static std::make_unsigned_t< size_type > DEFAULT_BUFSIZE = 32768;
         
         /* Helper functions */
-        // Fast ASCII whitespace check - avoids locale overhead of std::isspace
+        // Fast ASCII whitespace check using lookup table
+        // Lookup table is faster than multi-branch OR condition
+        // Whitespace: tab(9), newline(10), vtab(11), ff(12), cr(13), space(32)
+        static constexpr bool is_space_lut[256] = {
+          false, false, false, false, false, false, false, false,
+          false, true , true , true , true , true , false, false,
+          false, false, false, false, false, false, false, false,
+          false, false, false, false, false, false, false, false,
+          true , false, false, false, false, false, false, false,
+          false, false, false, false, false, false, false, false,
+          false, false, false, false, false, false, false, false,
+          false, false, false, false, false, false, false, false,
+          false, false, false, false, false, false, false, false,
+          false, false, false, false, false, false, false, false,
+          false, false, false, false, false, false, false, false,
+          false, false, false, false, false, false, false, false,
+          false, false, false, false, false, false, false, false,
+          false, false, false, false, false, false, false, false,
+          false, false, false, false, false, false, false, false,
+          false, false, false, false, false, false, false, false,
+          false, false, false, false, false, false, false, false,
+          false, false, false, false, false, false, false, false,
+          false, false, false, false, false, false, false, false,
+          false, false, false, false, false, false, false, false,
+          false, false, false, false, false, false, false, false,
+          false, false, false, false, false, false, false, false,
+          false, false, false, false, false, false, false, false,
+          false, false, false, false, false, false, false, false,
+          false, false, false, false, false, false, false, false,
+          false, false, false, false, false, false, false, false,
+          false, false, false, false, false, false, false, false,
+          false, false, false, false, false, false, false, false,
+          false, false, false, false, false, false, false, false,
+          false, false, false, false, false, false, false, false,
+          false, false, false, false, false, false, false, false,
+          false, false, false, false, false, false, false, false
+        };
+        
         static inline bool is_space_ascii( char_type c ) noexcept {
-          // ASCII whitespace: space, tab, newline, vertical tab, form feed, carriage return
-          return c == ' ' || c == '\t' || c == '\n' || c == '\v' || c == '\f' || c == '\r';
+          // Use lookup table for O(1) check without branching
+          return is_space_lut[static_cast<unsigned char>(c)];
         }
         
         /* Data members */
