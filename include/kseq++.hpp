@@ -48,10 +48,12 @@ namespace klibpp {
     std::string seq;
     std::string qual;
     inline void clear( ) {
-      name.clear();
-      comment.clear();
-      seq.clear();
-      qual.clear();
+      // Use resize(0) instead of clear() to preserve capacity
+      // This avoids reallocating memory on every record
+      name.resize(0);
+      comment.resize(0);
+      seq.resize(0);
+      qual.resize(0);
     }
   };
 
@@ -448,6 +450,14 @@ namespace klibpp {
         constexpr static char_type SEP_MAX = 2;
         /* Consts */
         constexpr static std::make_unsigned_t< size_type > DEFAULT_BUFSIZE = 32768;
+        
+        /* Helper functions */
+        // Fast ASCII whitespace check - avoids locale overhead of std::isspace
+        static inline bool is_space_ascii( char_type c ) noexcept {
+          // ASCII whitespace: space, tab, newline, vertical tab, form feed, carriage return
+          return c == ' ' || c == '\t' || c == '\n' || c == '\v' || c == '\f' || c == '\r';
+        }
+        
         /* Data members */
         char_type* buf;                      /**< @brief character buffer */
         size_type bufsize;                   /**< @brief buffer size */
@@ -588,7 +598,10 @@ namespace klibpp {
           rec.clear();  // reset all members
           // Pre-allocate typical sequence size to reduce reallocations
           // Most sequences are 100-500bp, reserve conservatively
-          rec.seq.reserve(512);
+          // Only reserve if capacity is insufficient
+          if ( rec.seq.capacity() < 512 ) {
+            rec.seq.reserve(512);
+          }
           if ( !this->getuntil( KStream::SEP_SPACE, rec.name, &c ) ) return *this;
           if ( c != '\n' ) {  // read FASTA/Q comment
             this->getuntil( KStream::SEP_LINE, rec.comment, nullptr );
@@ -607,8 +620,10 @@ namespace klibpp {
             this->is_tqs = true;
             return *this;
           }
-          // Reserve qual capacity to match seq size
-          rec.qual.reserve( rec.seq.size() );
+          // Reserve qual capacity to match seq size only if needed
+          if ( rec.qual.capacity() < rec.seq.size() ) {
+            rec.qual.reserve( rec.seq.size() );
+          }
           while ( this->getuntil( KStream::SEP_LINE, rec.qual, nullptr, true ) &&
               rec.qual.size() < rec.seq.size() );
           if ( this->err() ) return *this;
@@ -695,12 +710,12 @@ namespace klibpp {
             }
             else if ( delimiter == KStream::SEP_SPACE ) {
               for ( i = this->begin; i < this->end; ++i ) {
-                if ( std::isspace( this->buf[ i ] ) ) break;
+                if ( is_space_ascii( this->buf[ i ] ) ) break;
               }
             }
             else if ( delimiter == KStream::SEP_TAB ) {
               for ( i = this->begin; i < this->end; ++i ) {
-                if ( std::isspace( this->buf[ i ] ) && this->buf[ i ] != ' ' ) break;
+                if ( is_space_ascii( this->buf[ i ] ) && this->buf[ i ] != ' ' ) break;
               }
             }
             else {
