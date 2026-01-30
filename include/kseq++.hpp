@@ -449,7 +449,7 @@ namespace klibpp {
         constexpr static char_type SEP_LINE = 2;   // line separator: "\n" (Unix) or "\r\n" (Windows)
         constexpr static char_type SEP_MAX = 2;
         /* Consts */
-        constexpr static std::make_unsigned_t< size_type > DEFAULT_BUFSIZE = 32768;
+        constexpr static std::make_unsigned_t< size_type > DEFAULT_BUFSIZE = 16384;
         
         /* Helper functions */
         // Fast ASCII whitespace check using lookup table
@@ -633,12 +633,6 @@ namespace klibpp {
             this->is_ready = true;
           }  // else: the first header char has been read in the previous call
           rec.clear();  // reset all members
-          // Pre-allocate typical sequence size to reduce reallocations
-          // Most sequences are 100-500bp, reserve conservatively
-          // Only reserve if capacity is insufficient
-          if ( rec.seq.capacity() < 512 ) {
-            rec.seq.reserve(512);
-          }
           if ( !this->getuntil( KStream::SEP_SPACE, rec.name, &c ) ) return *this;
           if ( c != '\n' ) {  // read FASTA/Q comment
             this->getuntil( KStream::SEP_LINE, rec.comment, nullptr );
@@ -657,10 +651,7 @@ namespace klibpp {
             this->is_tqs = true;
             return *this;
           }
-          // Reserve qual capacity to match seq size only if needed
-          if ( rec.qual.capacity() < rec.seq.size() ) {
-            rec.qual.reserve( rec.seq.size() );
-          }
+          rec.qual.reserve( rec.seq.size() );
           while ( this->getuntil( KStream::SEP_LINE, rec.qual, nullptr, true ) &&
               rec.qual.size() < rec.seq.size() );
           if ( this->err() ) return *this;
