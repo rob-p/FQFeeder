@@ -159,7 +159,7 @@ int main(int argc, char* argv[]) {
   CLI11_PARSE(app, argc, argv);
 
   auto pc = fastx_parser::ParserConfigBuilder().within_set_parallelism(use_parallel).with_consumers(nworker).with_parsers(nprod).build();
-  pc.chunkSize = 1024;
+  pc.chunkSize = 256;
 
   std::atomic<size_t> ctr{0};
   Bases b; 
