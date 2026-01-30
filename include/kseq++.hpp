@@ -447,7 +447,7 @@ namespace klibpp {
         constexpr static char_type SEP_LINE = 2;   // line separator: "\n" (Unix) or "\r\n" (Windows)
         constexpr static char_type SEP_MAX = 2;
         /* Consts */
-        constexpr static std::make_unsigned_t< size_type > DEFAULT_BUFSIZE = 16384;
+        constexpr static std::make_unsigned_t< size_type > DEFAULT_BUFSIZE = 32768;
         /* Data members */
         char_type* buf;                      /**< @brief character buffer */
         size_type bufsize;                   /**< @brief buffer size */
@@ -586,13 +586,16 @@ namespace klibpp {
             this->is_ready = true;
           }  // else: the first header char has been read in the previous call
           rec.clear();  // reset all members
+          // Pre-allocate typical sequence size to reduce reallocations
+          // Most sequences are 100-500bp, reserve conservatively
+          rec.seq.reserve(512);
           if ( !this->getuntil( KStream::SEP_SPACE, rec.name, &c ) ) return *this;
           if ( c != '\n' ) {  // read FASTA/Q comment
             this->getuntil( KStream::SEP_LINE, rec.comment, nullptr );
           }
           while ( ( c = this->getc( ) ) && c != '>' && c != '@' && c != '+' ) {
             if ( c == '\n' ) continue;  // skip empty lines
-            rec.seq += c;
+            rec.seq.push_back( c );  // push_back is more efficient than += for single char
             this->getuntil( KStream::SEP_LINE, rec.seq, nullptr, true ); // read the rest of the line
           }
           this->last = true;
@@ -604,6 +607,8 @@ namespace klibpp {
             this->is_tqs = true;
             return *this;
           }
+          // Reserve qual capacity to match seq size
+          rec.qual.reserve( rec.seq.size() );
           while ( this->getuntil( KStream::SEP_LINE, rec.qual, nullptr, true ) &&
               rec.qual.size() < rec.seq.size() );
           if ( this->err() ) return *this;
@@ -684,9 +689,9 @@ namespace klibpp {
               i = ( sep != nullptr ) ? ( sep - this->buf ) : this->end;
             }
             else if ( delimiter > KStream::SEP_MAX ) {
-              for ( i = this->begin; i < this->end; ++i ) {
-                if ( this->buf[ i ] == delimiter ) break;
-              }
+              // Use memchr for single character search - faster than manual loop
+              char_type* sep = ( char_type* )std::memchr( this->buf + this->begin, delimiter, this->end - this->begin );
+              i = ( sep != nullptr ) ? ( sep - this->buf ) : this->end;
             }
             else if ( delimiter == KStream::SEP_SPACE ) {
               for ( i = this->begin; i < this->end; ++i ) {
