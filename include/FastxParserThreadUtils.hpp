@@ -52,7 +52,7 @@ ALWAYS_INLINE static void cpuRelax() {
 
 ALWAYS_INLINE void yieldSleep() {
   using namespace std::chrono;
-  std::chrono::microseconds ytime(100);
+  std::chrono::microseconds ytime(20);
   std::this_thread::sleep_for(ytime);
 }
 
@@ -201,6 +201,140 @@ int assemble_read_set(
         }
       }
       */
+      // Assemble N-tuple
+      T& readSet = (*local)[numWaiting];
+      for (size_t i = 0; i < N; ++i) {
+        readSet[i] = std::move((*chunks[i])[indices[i]++]);
+      }
+      ++numWaiting;
+      ++gathered_count;
+
+      if (numWaiting == numObtained) {
+        local->have(numWaiting);
+        local->set_chunk_frag_offset(file_idx, gathered_count - numWaiting);
+
+        thread_utils::simple_wait([&]() { 
+          return readQueue.try_enqueue(*pRead, std::move(local));
+        });
+
+        // get next output chunk
+        numWaiting = 0;
+
+        thread_utils::simple_wait([&]() { 
+          return seqContainerQueue.try_dequeue(*cCont, local);
+        });
+        numObtained = local->size();
+      }
+    } else {
+      // not all queues have data, but check if we're done before backing off
+      if (all_done()) {
+        break;
+      }
+    }
+
+  }
+
+  // flush remaining
+  if (numWaiting > 0) {
+    local->have(numWaiting);
+    local->set_chunk_frag_offset(file_idx, gathered_count - numWaiting);
+
+    thread_utils::simple_wait([&]() { 
+      return readQueue.try_enqueue(*pRead, std::move(local));
+    });
+  } else {
+    thread_utils::simple_wait([&]() { 
+      return seqContainerQueue.try_enqueue(std::move(local));
+    });
+  }
+
+  return 0;
+}
+
+// Version that takes raw array references instead of shared_ptr arrays
+template <typename T, size_t N>
+int assemble_read_set_raw(
+    std::array<moodycamel::ConcurrentQueue<
+        std::unique_ptr<ReadChunk<klibpp::KSeq>>>, N>& queues,
+    std::array<moodycamel::ConcurrentQueue<
+        std::unique_ptr<ReadChunk<klibpp::KSeq>>>, N>& recycleQueues,
+    moodycamel::ConsumerToken* cCont,
+    moodycamel::ProducerToken* pRead,
+    moodycamel::ConcurrentQueue<std::unique_ptr<ReadChunk<T>>>& seqContainerQueue,
+    moodycamel::ConcurrentQueue<std::unique_ptr<ReadChunk<T>>>& readQueue,
+    uint32_t file_idx) {
+
+  std::array<std::unique_ptr<ReadChunk<klibpp::KSeq>>, N> chunks;
+  std::array<size_t, N> indices{};
+  std::array<bool, N> fileDone{};
+  
+  // get initial output chunk
+  std::unique_ptr<ReadChunk<T>> local;
+   
+  bool got_chunk = seqContainerQueue.try_dequeue(*cCont, local);
+  if (!got_chunk) {
+    thread_utils::simple_wait([&]() { 
+      return seqContainerQueue.try_dequeue(*cCont, local);
+    });
+  }
+  
+  size_t numObtained = local->size();
+  size_t numWaiting = 0;
+  uint64_t gathered_count = 0;
+
+  // Lambda to fetch chunk from a specific queue
+  auto fetch_chunk = [&](size_t idx) -> bool {
+    if (chunks[idx] && indices[idx] < chunks[idx]->size())
+      return true;
+    if (fileDone[idx])
+      return false;
+
+    std::unique_ptr<ReadChunk<klibpp::KSeq>> next_chunk;
+    // Access queue directly (not through shared_ptr)
+    if (queues[idx].try_dequeue(next_chunk)) {
+      if (next_chunk == nullptr) {
+        fileDone[idx] = true;
+        if (chunks[idx])
+          recycleQueues[idx].enqueue(std::move(chunks[idx]));
+        chunks[idx] = nullptr;
+        return false;
+      }
+      if (chunks[idx]) {
+        recycleQueues[idx].enqueue(std::move(chunks[idx]));
+      }
+      chunks[idx] = std::move(next_chunk);
+      indices[idx] = 0;
+      return true;
+    }
+    return false;
+  };
+
+  // Check if all files are done
+  auto all_done = [&]() {
+    for (size_t i = 0; i < N; ++i) {
+      if (!fileDone[i] || chunks[i])
+        return false;
+    }
+    return true;
+  };
+
+  while (!all_done()) {
+    // Try to fetch from all queues to update their done status
+    std::array<bool, N> haveData;
+    for (size_t i = 0; i < N; ++i) {
+      haveData[i] = fetch_chunk(i);
+    }
+
+    // Check if all queues have data
+    bool allHaveData = true;
+    for (size_t i = 0; i < N; ++i) {
+      if (!haveData[i]) {
+        allHaveData = false;
+        break;
+      }
+    }
+
+    if (allHaveData) {
       // Assemble N-tuple
       T& readSet = (*local)[numWaiting];
       for (size_t i = 0; i < N; ++i) {

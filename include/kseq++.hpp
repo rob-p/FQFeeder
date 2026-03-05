@@ -48,10 +48,12 @@ namespace klibpp {
     std::string seq;
     std::string qual;
     inline void clear( ) {
-      name.clear();
-      comment.clear();
-      seq.clear();
-      qual.clear();
+      // Use resize(0) instead of clear() to preserve capacity
+      // This avoids reallocating memory on every record
+      name.resize(0);
+      comment.resize(0);
+      seq.resize(0);
+      qual.resize(0);
     }
   };
 
@@ -448,6 +450,51 @@ namespace klibpp {
         constexpr static char_type SEP_MAX = 2;
         /* Consts */
         constexpr static std::make_unsigned_t< size_type > DEFAULT_BUFSIZE = 16384;
+        
+        /* Helper functions */
+        // Fast ASCII whitespace check using lookup table
+        // Lookup table is faster than multi-branch OR condition
+        // Whitespace: tab(9), newline(10), vtab(11), ff(12), cr(13), space(32)
+        static constexpr bool is_space_lut[256] = {
+          false, false, false, false, false, false, false, false,
+          false, true , true , true , true , true , false, false,
+          false, false, false, false, false, false, false, false,
+          false, false, false, false, false, false, false, false,
+          true , false, false, false, false, false, false, false,
+          false, false, false, false, false, false, false, false,
+          false, false, false, false, false, false, false, false,
+          false, false, false, false, false, false, false, false,
+          false, false, false, false, false, false, false, false,
+          false, false, false, false, false, false, false, false,
+          false, false, false, false, false, false, false, false,
+          false, false, false, false, false, false, false, false,
+          false, false, false, false, false, false, false, false,
+          false, false, false, false, false, false, false, false,
+          false, false, false, false, false, false, false, false,
+          false, false, false, false, false, false, false, false,
+          false, false, false, false, false, false, false, false,
+          false, false, false, false, false, false, false, false,
+          false, false, false, false, false, false, false, false,
+          false, false, false, false, false, false, false, false,
+          false, false, false, false, false, false, false, false,
+          false, false, false, false, false, false, false, false,
+          false, false, false, false, false, false, false, false,
+          false, false, false, false, false, false, false, false,
+          false, false, false, false, false, false, false, false,
+          false, false, false, false, false, false, false, false,
+          false, false, false, false, false, false, false, false,
+          false, false, false, false, false, false, false, false,
+          false, false, false, false, false, false, false, false,
+          false, false, false, false, false, false, false, false,
+          false, false, false, false, false, false, false, false,
+          false, false, false, false, false, false, false, false
+        };
+        
+        static inline bool is_space_ascii( char_type c ) noexcept {
+          // Use lookup table for O(1) check without branching
+          return is_space_lut[static_cast<unsigned char>(c)];
+        }
+        
         /* Data members */
         char_type* buf;                      /**< @brief character buffer */
         size_type bufsize;                   /**< @brief buffer size */
@@ -592,7 +639,7 @@ namespace klibpp {
           }
           while ( ( c = this->getc( ) ) && c != '>' && c != '@' && c != '+' ) {
             if ( c == '\n' ) continue;  // skip empty lines
-            rec.seq += c;
+            rec.seq.push_back( c );  // push_back is more efficient than += for single char
             this->getuntil( KStream::SEP_LINE, rec.seq, nullptr, true ); // read the rest of the line
           }
           this->last = true;
@@ -604,6 +651,7 @@ namespace klibpp {
             this->is_tqs = true;
             return *this;
           }
+          rec.qual.reserve( rec.seq.size() );
           while ( this->getuntil( KStream::SEP_LINE, rec.qual, nullptr, true ) &&
               rec.qual.size() < rec.seq.size() );
           if ( this->err() ) return *this;
@@ -684,18 +732,18 @@ namespace klibpp {
               i = ( sep != nullptr ) ? ( sep - this->buf ) : this->end;
             }
             else if ( delimiter > KStream::SEP_MAX ) {
-              for ( i = this->begin; i < this->end; ++i ) {
-                if ( this->buf[ i ] == delimiter ) break;
-              }
+              // Use memchr for single character search - faster than manual loop
+              char_type* sep = ( char_type* )std::memchr( this->buf + this->begin, delimiter, this->end - this->begin );
+              i = ( sep != nullptr ) ? ( sep - this->buf ) : this->end;
             }
             else if ( delimiter == KStream::SEP_SPACE ) {
               for ( i = this->begin; i < this->end; ++i ) {
-                if ( std::isspace( this->buf[ i ] ) ) break;
+                if ( is_space_ascii( this->buf[ i ] ) ) break;
               }
             }
             else if ( delimiter == KStream::SEP_TAB ) {
               for ( i = this->begin; i < this->end; ++i ) {
-                if ( std::isspace( this->buf[ i ] ) && this->buf[ i ] != ' ' ) break;
+                if ( is_space_ascii( this->buf[ i ] ) && this->buf[ i ] != ' ' ) break;
               }
             }
             else {
